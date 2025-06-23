@@ -188,3 +188,108 @@ func PrintComparison(comparison StockComparison) {
 		fmt.Println("当前市场环境下，建议谨慎投资，可考虑观望或降低仓位。")
 	}
 }
+
+// 多因子打分参数结构
+type FactorWeight struct {
+	Name   string
+	Weight float64
+}
+
+// 支持的所有因子及默认权重
+var DefaultFactors = []FactorWeight{
+	{"Momentum", 0.20},
+	{"Volatility", 0.10},
+	{"MA5", 0.10},
+	{"RSI", 0.20},
+	{"MACD", 0.20},
+	{"Turnover", 0.10},
+	{"OBV", 0.10},
+}
+
+// 多因子归一化打分
+func ScoreStocksByFactors(stockData map[string][]data.Kline, factors []FactorWeight) StockComparison {
+	// 1. 计算所有股票的最新因子
+	type factorRaw struct {
+		Code   string
+		Values map[string]float64
+		Origin Factors
+	}
+
+	var allRaw []factorRaw
+	for code, klines := range stockData {
+		if len(klines) == 0 {
+			continue
+		}
+		factorsArr := CalcFactors(klines)
+		if len(factorsArr) == 0 {
+			continue
+		}
+		latest := factorsArr[len(factorsArr)-1]
+		values := map[string]float64{
+			"Momentum":   latest.Momentum,
+			"Volatility": latest.Volatility,
+			"MA5":        latest.MA5,
+			"RSI":        latest.RSI,
+			"MACD":       latest.MACD,
+			"Turnover":   latest.Turnover,
+			"OBV":        latest.OBV,
+		}
+		allRaw = append(allRaw, factorRaw{Code: code, Values: values, Origin: latest})
+	}
+
+	if len(allRaw) == 0 {
+		return StockComparison{}
+	}
+
+	// 2. 对每个因子归一化（min-max）
+	normed := make([]map[string]float64, len(allRaw))
+	for i := range normed {
+		normed[i] = make(map[string]float64)
+	}
+	for _, fw := range factors {
+		minV, maxV := 1e12, -1e12
+		for _, row := range allRaw {
+			v := row.Values[fw.Name]
+			if v < minV {
+				minV = v
+			}
+			if v > maxV {
+				maxV = v
+			}
+		}
+		for i, row := range allRaw {
+			v := row.Values[fw.Name]
+			if maxV > minV {
+				normed[i][fw.Name] = (v - minV) / (maxV - minV)
+			} else {
+				normed[i][fw.Name] = 0.5 // 全部一样时给0.5
+			}
+		}
+	}
+
+	// 3. 计算加权总分
+	var comparison StockComparison
+	for i, row := range allRaw {
+		score := 0.0
+		for _, fw := range factors {
+			score += normed[i][fw.Name] * fw.Weight
+		}
+		stockScore := StockScore{
+			Code:    row.Code,
+			Name:    getStockName(row.Code),
+			Factors: row.Origin,
+			Score:   score * 100, // 归一化后乘100
+		}
+		comparison.Stocks = append(comparison.Stocks, stockScore)
+	}
+
+	// 4. 排序和排名
+	sort.Slice(comparison.Stocks, func(i, j int) bool {
+		return comparison.Stocks[i].Score > comparison.Stocks[j].Score
+	})
+	for i := range comparison.Stocks {
+		comparison.Stocks[i].Rank = i + 1
+	}
+
+	return comparison
+}
