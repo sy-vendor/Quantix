@@ -107,11 +107,28 @@ func GenerateBacktestChart(klines []data.Kline, backtestResult BacktestResult, s
 
 // 生成综合分析图表
 func GenerateAnalysisChart(klines []data.Kline, factors Factors, prediction Prediction, backtestResult BacktestResult, stockCode, startDate, endDate string) error {
+	// 转换回测数据
+	var backtestPoints []BacktestPoint
+	if len(klines) > 0 {
+		initialCapital := backtestResult.InitialCapital
+		backtestPoints = append(backtestPoints, BacktestPoint{
+			Date:    klines[0].Date.Format("2006-01-02"),
+			Capital: initialCapital,
+		})
+		for _, trade := range backtestResult.TradeHistory {
+			backtestPoints = append(backtestPoints, BacktestPoint{
+				Date:    trade.Date,
+				Capital: trade.Capital,
+			})
+		}
+	}
+
 	chartData := ChartData{
 		StockCode:      stockCode,
 		StartDate:      startDate,
 		EndDate:        endDate,
 		Klines:         convertKlines(klines),
+		BacktestData:   backtestPoints,
 		Factors:        factors,
 		Prediction:     prediction,
 		BacktestResult: backtestResult,
