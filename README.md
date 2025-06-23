@@ -1,7 +1,7 @@
 # Quantix - 股票量化分析系统
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/sy-vendor/Quantix)](https://golang.org/)
-[![License](https://img.shields.io/github/license/sy-vendor/Quantix)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/sy-vendor/Quantix)](https://github.com/sy-vendor/Quantix/issues)
 [![Pull Requests](https://img.shields.io/github/issues-pr/sy-vendor/Quantix)](https://github.com/sy-vendor/Quantix/pulls)
 [![Stars](https://img.shields.io/github/stars/sy-vendor/Quantix)](https://github.com/sy-vendor/Quantix/stargazers)
