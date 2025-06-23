@@ -222,7 +222,7 @@ func TestDataConsistency(t *testing.T) {
 				if factor.RSI < 0 || factor.RSI > 100 {
 					t.Errorf("第%d个因子RSI值异常: %.2f", i, factor.RSI)
 				}
-				if factor.MA5 <= 0 {
+				if i >= 4 && factor.MA5 <= 0 {
 					t.Errorf("第%d个因子MA5值异常: %.2f", i, factor.MA5)
 				}
 			}

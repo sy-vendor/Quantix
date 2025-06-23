@@ -4,6 +4,11 @@ import (
 	"Quantix/data"
 	"fmt"
 	"math"
+	"runtime/debug"
+
+	"github.com/sjwhitworth/golearn/base"
+	"github.com/sjwhitworth/golearn/ensemble"
+	"github.com/sjwhitworth/golearn/trees"
 )
 
 // MLPrediction 机器学习预测结果
@@ -35,6 +40,10 @@ func NewMLPredictor(klines []data.Kline, factors []Factors) *MLPredictor {
 
 // PredictAll 执行所有预测方法
 func (p *MLPredictor) PredictAll() map[string]MLPrediction {
+	if len(p.factors) <= 1 {
+		fmt.Printf("[ML] PredictAll: factors 长度=%d，直接返回空预测\n", len(p.factors))
+		return map[string]MLPrediction{}
+	}
 	predictions := make(map[string]MLPrediction)
 
 	// 线性回归预测
@@ -45,6 +54,12 @@ func (p *MLPredictor) PredictAll() map[string]MLPrediction {
 
 	// 技术指标预测
 	predictions["technical"] = p.technicalIndicatorPredict()
+
+	// 决策树预测
+	predictions["decision_tree"] = p.decisionTreePredict()
+
+	// 随机森林预测
+	predictions["random_forest"] = p.randomForestPredict()
 
 	// 组合预测
 	predictions["ensemble"] = p.ensemblePredict(predictions)
@@ -234,6 +249,9 @@ func (p *MLPredictor) technicalIndicatorPredict() MLPrediction {
 
 // ensemblePredict 组合预测
 func (p *MLPredictor) ensemblePredict(predictions map[string]MLPrediction) MLPrediction {
+	if len(p.factors) <= 1 {
+		return MLPrediction{Method: "组合预测", Confidence: 0}
+	}
 	var totalPrice float64
 	var totalConfidence float64
 	var count int
@@ -281,6 +299,187 @@ func (p *MLPredictor) ensemblePredict(predictions map[string]MLPrediction) MLPre
 		Trend:          trend,
 		Accuracy:       p.calculateHistoricalAccuracy("ensemble"),
 	}
+}
+
+// 决策树预测
+func (p *MLPredictor) decisionTreePredict() MLPrediction {
+	if len(p.factors) < 30 {
+		return MLPrediction{Method: "决策树", Confidence: 0}
+	}
+	if len(p.factors) <= 1 {
+		return MLPrediction{Method: "决策树", Confidence: 0}
+	}
+	inst, featureNames, classAttr := buildMLInstances(p.factors)
+	// 训练决策树
+	dt := trees.NewID3DecisionTree(0.6)
+	dt.Fit(inst)
+	// 预测最新因子
+	latest := p.factors[len(p.factors)-1]
+	latestInst := buildSingleInstance(latest, featureNames, classAttr)
+	cls, err := dt.Predict(latestInst)
+	if err != nil {
+		return MLPrediction{Method: "决策树", Confidence: 0}
+	}
+	label := base.GetClass(cls, 0)
+	trend := "横盘"
+	if label == "up" {
+		trend = "上涨"
+	} else if label == "down" {
+		trend = "下跌"
+	}
+	return MLPrediction{
+		Method:     "决策树",
+		Trend:      trend,
+		Confidence: 0.7,
+	}
+}
+
+// 随机森林预测
+func (p *MLPredictor) randomForestPredict() MLPrediction {
+	if len(p.factors) < 30 {
+		return MLPrediction{Method: "随机森林", Confidence: 0}
+	}
+	if len(p.factors) <= 1 {
+		return MLPrediction{Method: "随机森林", Confidence: 0}
+	}
+	inst, featureNames, classAttr := buildMLInstances(p.factors)
+	rf := ensemble.NewRandomForest(10, 3)
+	rf.Fit(inst)
+	latest := p.factors[len(p.factors)-1]
+	latestInst := buildSingleInstance(latest, featureNames, classAttr)
+	cls, err := rf.Predict(latestInst)
+	if err != nil {
+		return MLPrediction{Method: "随机森林", Confidence: 0}
+	}
+	label := base.GetClass(cls, 0)
+	trend := "横盘"
+	if label == "up" {
+		trend = "上涨"
+	} else if label == "down" {
+		trend = "下跌"
+	}
+	return MLPrediction{
+		Method:     "随机森林",
+		Trend:      trend,
+		Confidence: 0.8,
+	}
+}
+
+// 构造golearn数据集
+func buildMLInstances(factors []Factors) (*base.DenseInstances, []string, *base.CategoricalAttribute) {
+	// 选取部分常用因子
+	featureNames := []string{"MA5", "MA10", "RSI", "MACD", "Momentum", "Volatility"}
+	attrs := make([]base.Attribute, len(featureNames))
+	for i, name := range featureNames {
+		attrs[i] = base.NewFloatAttribute(name)
+	}
+	// 正确创建 classAttr 并命名
+	classAttr := base.NewCategoricalAttribute()
+	classAttr.SetName("label")
+	inst := base.NewDenseInstances()
+	for _, attr := range attrs {
+		inst.AddAttribute(attr)
+	}
+	inst.AddAttribute(classAttr)      // 先加到 attributes
+	inst.AddClassAttribute(classAttr) // 再注册为 class
+	rowCount := len(factors) - 1
+	if len(factors) <= 1 || rowCount < 1 {
+		fmt.Printf("[ML][PANIC] buildMLInstances 非法调用: len(factors)=%d, rowCount=%d\n", len(factors), rowCount)
+		debug.PrintStack()
+		panic("[ML] buildMLInstances: 非法调用，factors 数据不足")
+	}
+	inst.Extend(rowCount)
+	for i := 1; i < len(factors); i++ {
+		rowIdx := i - 1
+		if rowIdx < 0 || rowIdx >= rowCount {
+			fmt.Printf("[ML][PANIC] buildMLInstances: i=%d, rowIdx=%d, len(factors)=%d, rowCount=%d, factors[i-1]=%+v, 跳过写入\n", i, rowIdx, len(factors), rowCount, factors[i-1])
+			debug.PrintStack()
+			panic("[ML] buildMLInstances: rowIdx 越界")
+		}
+		row := make([]float64, len(featureNames))
+		for j, name := range featureNames {
+			switch name {
+			case "MA5":
+				row[j] = factors[i-1].MA5
+			case "MA10":
+				row[j] = factors[i-1].MA10
+			case "RSI":
+				row[j] = factors[i-1].RSI
+			case "MACD":
+				row[j] = factors[i-1].MACD
+			case "Momentum":
+				row[j] = factors[i-1].Momentum
+			case "Volatility":
+				row[j] = factors[i-1].Volatility
+			}
+		}
+		label := "flat"
+		if row[0] > row[1] && row[1] > row[2] {
+			label = "up"
+		} else if row[0] < row[1] && row[1] < row[2] {
+			label = "down"
+		}
+		for k, v := range row {
+			colSpec, _ := inst.GetAttribute(attrs[k])
+			inst.Set(colSpec, rowIdx, base.PackFloatToBytes(v))
+		}
+		classColSpec, err := inst.GetAttribute(classAttr)
+		if err != nil {
+			fmt.Printf("[ML][PANIC] classColSpec 获取失败: err=%v, classColSpec=%+v\n", err, classColSpec)
+			fmt.Printf("[ML][PANIC] classAttr=%+v\n", classAttr)
+			fmt.Printf("[ML][PANIC] inst.AllAttributes()=%+v\n", inst.AllAttributes())
+			fmt.Printf("[ML][PANIC] inst.AllClassAttributes()=%+v\n", inst.AllClassAttributes())
+			debug.PrintStack()
+			panic("[ML] buildMLInstances: classColSpec 获取失败")
+		}
+		idx := classAttr.GetSysValFromString(label)
+		inst.Set(classColSpec, rowIdx, idx)
+	}
+	return inst, featureNames, classAttr
+}
+
+// 构造单条预测样本
+func buildSingleInstance(f Factors, featureNames []string, classAttr *base.CategoricalAttribute) *base.DenseInstances {
+	attrs := make([]base.Attribute, len(featureNames))
+	for i, name := range featureNames {
+		attrs[i] = base.NewFloatAttribute(name)
+	}
+	inst := base.NewDenseInstances()
+	for _, attr := range attrs {
+		inst.AddAttribute(attr)
+	}
+	inst.AddAttribute(classAttr)      // 先加到 attributes
+	inst.AddClassAttribute(classAttr) // 再注册为 class
+	if len(featureNames) == 0 {
+		return inst
+	}
+	inst.Extend(1)
+	row := make([]float64, len(featureNames))
+	for j, name := range featureNames {
+		switch name {
+		case "MA5":
+			row[j] = f.MA5
+		case "MA10":
+			row[j] = f.MA10
+		case "RSI":
+			row[j] = f.RSI
+		case "MACD":
+			row[j] = f.MACD
+		case "Momentum":
+			row[j] = f.Momentum
+		case "Volatility":
+			row[j] = f.Volatility
+		}
+	}
+	rowIdx := 0
+	for k, v := range row {
+		colSpec, _ := inst.GetAttribute(attrs[k])
+		inst.Set(colSpec, rowIdx, base.PackFloatToBytes(v))
+	}
+	classColSpec, _ := inst.GetAttribute(classAttr)
+	idx := classAttr.GetSysValFromString("flat")
+	inst.Set(classColSpec, rowIdx, idx)
+	return inst
 }
 
 // 辅助方法
