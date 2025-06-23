@@ -90,13 +90,19 @@ func AnalyzeMultipleStocks(stockData map[string][]data.Kline) StockComparison {
 		}
 
 		factors := CalcFactors(klines)
-		score := calculateScore(factors)
-		recommend := generateRecommendation(score, factors)
+		if len(factors) == 0 {
+			continue
+		}
+
+		// 使用最新的技术指标
+		latestFactors := factors[len(factors)-1]
+		score := calculateScore(latestFactors)
+		recommend := generateRecommendation(score, latestFactors)
 
 		stockScore := StockScore{
 			Code:      code,
 			Name:      getStockName(code),
-			Factors:   factors,
+			Factors:   latestFactors,
 			Score:     score,
 			Recommend: recommend,
 		}

@@ -26,27 +26,33 @@ func PredictTrend(klines []data.Kline) Prediction {
 	}
 
 	factors := CalcFactors(klines)
+	if len(factors) == 0 {
+		return Prediction{Trend: "数据不足", Confidence: 0}
+	}
+
+	// 使用最新的技术指标
+	latestFactors := factors[len(factors)-1]
 	prices := extractPrices(klines)
 
 	var pred Prediction
 
 	// 1. 趋势判断
-	pred.Trend = determineTrend(factors, prices)
+	pred.Trend = determineTrend(latestFactors, prices)
 
 	// 2. 置信度计算
-	pred.Confidence = calculateConfidence(factors, prices)
+	pred.Confidence = calculateConfidence(latestFactors, prices)
 
 	// 3. 价格区间预测
-	pred.PriceRange = predictPriceRange(klines, factors)
+	pred.PriceRange = predictPriceRange(klines, latestFactors)
 
 	// 4. 信号强度
-	pred.SignalStrength = calculateSignalStrength(factors)
+	pred.SignalStrength = calculateSignalStrength(latestFactors)
 
 	// 5. 下一天预测价格
-	pred.NextDayPred = predictNextDayPrice(klines, factors)
+	pred.NextDayPred = predictNextDayPrice(klines, latestFactors)
 
 	// 6. 风险等级
-	pred.RiskLevel = assessRisk(factors, prices)
+	pred.RiskLevel = assessRisk(latestFactors, prices)
 
 	// 7. 操作建议
 	pred.Recommendation = generatePredictionRecommendation(pred)

@@ -1,46 +1,124 @@
 package analysis
 
-import "fmt"
+import (
+	"fmt"
+)
 
-func PrintAnalysis(f Factors) {
-	fmt.Println("=== 量化因子分析 ===")
-	fmt.Println("--- 移动平均线 ---")
-	fmt.Printf("5日均线:  %.2f\n", f.MA5)
-	fmt.Printf("10日均线: %.2f\n", f.MA10)
-	fmt.Printf("20日均线: %.2f\n", f.MA20)
-
-	fmt.Println("\n--- 价格指标 ---")
-	fmt.Printf("动量:     %.2f\n", f.Momentum)
-	fmt.Printf("波动率:   %.4f\n", f.Volatility)
-
-	fmt.Println("\n--- 技术指标 ---")
-	fmt.Printf("换手率:   %.2f (相对20日均量)\n", f.Turnover)
-	fmt.Printf("RSI(14):  %.2f\n", f.RSI)
-	fmt.Printf("MACD:     %.4f\n", f.MACD)
-	fmt.Printf("MACD信号: %.4f\n", f.MACDSignal)
-	fmt.Printf("MACD柱:   %.4f\n", f.MACDHist)
-
-	// 添加简单的技术分析建议
-	fmt.Println("\n--- 技术分析建议 ---")
-	if f.RSI > 70 {
-		fmt.Println("RSI > 70: 可能超买，注意回调风险")
-	} else if f.RSI < 30 {
-		fmt.Println("RSI < 30: 可能超卖，关注反弹机会")
-	} else {
-		fmt.Println("RSI正常区间: 价格相对稳定")
+// PrintAnalysis 打印技术分析结果
+func PrintAnalysis(factors []Factors) {
+	if len(factors) == 0 {
+		fmt.Println("没有足够的数据进行分析")
+		return
 	}
 
-	if f.MACD > f.MACDSignal {
-		fmt.Println("MACD > 信号线: 短期趋势向上")
+	latest := factors[len(factors)-1]
+	fmt.Println("\n=== 技术指标分析 ===")
+	fmt.Printf("日期: %s\n", latest.Date)
+	fmt.Printf("收盘价: %.2f\n", latest.Close)
+	fmt.Printf("成交量: %.0f\n", latest.Volume)
+
+	fmt.Println("\n--- 移动平均线 ---")
+	fmt.Printf("MA5:  %.2f\n", latest.MA5)
+	fmt.Printf("MA10: %.2f\n", latest.MA10)
+	fmt.Printf("MA20: %.2f\n", latest.MA20)
+	fmt.Printf("MA30: %.2f\n", latest.MA30)
+
+	fmt.Println("\n--- 动量指标 ---")
+	fmt.Printf("动量(10日): %.2f%%\n", latest.Momentum)
+	fmt.Printf("波动率(20日): %.2f%%\n", latest.Volatility)
+	fmt.Printf("换手率: %.2f\n", latest.Turnover)
+
+	fmt.Println("\n--- 超买超卖指标 ---")
+	fmt.Printf("RSI(14): %.2f\n", latest.RSI)
+	fmt.Printf("威廉指标(14): %.2f\n", latest.WR)
+	fmt.Printf("KDJ-K: %.2f\n", latest.KDJ_K)
+	fmt.Printf("KDJ-D: %.2f\n", latest.KDJ_D)
+	fmt.Printf("KDJ-J: %.2f\n", latest.KDJ_J)
+
+	fmt.Println("\n--- 趋势指标 ---")
+	fmt.Printf("MACD: %.4f\n", latest.MACD)
+	fmt.Printf("MACD信号线: %.4f\n", latest.MACDSignal)
+	fmt.Printf("MACD柱状图: %.4f\n", latest.MACDHist)
+	fmt.Printf("CCI(20): %.2f\n", latest.CCI)
+
+	fmt.Println("\n--- 布林带 ---")
+	fmt.Printf("上轨: %.2f\n", latest.BBUpper)
+	fmt.Printf("中轨: %.2f\n", latest.BBMiddle)
+	fmt.Printf("下轨: %.2f\n", latest.BBLower)
+	fmt.Printf("带宽: %.2f%%\n", latest.BBWidth)
+	fmt.Printf("位置: %.2f%%\n", latest.BBPosition)
+
+	fmt.Println("\n--- 其他指标 ---")
+	fmt.Printf("ATR(14): %.2f\n", latest.ATR)
+	fmt.Printf("OBV: %.0f\n", latest.OBV)
+
+	// 技术分析建议
+	fmt.Println("\n=== 技术分析建议 ===")
+	printTechnicalAdvice(latest)
+}
+
+// printTechnicalAdvice 打印技术分析建议
+func printTechnicalAdvice(factor Factors) {
+	// RSI分析
+	if factor.RSI > 70 {
+		fmt.Println("⚠️  RSI超买区域，注意回调风险")
+	} else if factor.RSI < 30 {
+		fmt.Println("📈 RSI超卖区域，可能存在反弹机会")
 	} else {
-		fmt.Println("MACD < 信号线: 短期趋势向下")
+		fmt.Println("✅ RSI处于正常区间")
 	}
 
-	if f.Turnover > 1.5 {
-		fmt.Println("换手率较高: 交易活跃，注意量价配合")
-	} else if f.Turnover < 0.5 {
-		fmt.Println("换手率较低: 交易清淡，等待放量")
+	// MACD分析
+	if factor.MACD > factor.MACDSignal && factor.MACDHist > 0 {
+		fmt.Println("📈 MACD金叉，趋势向上")
+	} else if factor.MACD < factor.MACDSignal && factor.MACDHist < 0 {
+		fmt.Println("📉 MACD死叉，趋势向下")
 	} else {
-		fmt.Println("换手率正常: 交易量适中")
+		fmt.Println("➡️  MACD趋势不明显")
+	}
+
+	// 布林带分析
+	if factor.BBPosition > 80 {
+		fmt.Println("⚠️  接近布林带上轨，注意回调")
+	} else if factor.BBPosition < 20 {
+		fmt.Println("📈 接近布林带下轨，可能存在支撑")
+	} else {
+		fmt.Println("✅ 价格在布林带中轨附近")
+	}
+
+	// KDJ分析
+	if factor.KDJ_J > 80 {
+		fmt.Println("⚠️  KDJ超买，注意风险")
+	} else if factor.KDJ_J < 20 {
+		fmt.Println("📈 KDJ超卖，关注反弹")
+	} else {
+		fmt.Println("✅ KDJ处于正常区间")
+	}
+
+	// 威廉指标分析
+	if factor.WR > -20 {
+		fmt.Println("⚠️  威廉指标超买")
+	} else if factor.WR < -80 {
+		fmt.Println("📈 威廉指标超卖")
+	} else {
+		fmt.Println("✅ 威廉指标正常")
+	}
+
+	// CCI分析
+	if factor.CCI > 100 {
+		fmt.Println("📈 CCI显示强势")
+	} else if factor.CCI < -100 {
+		fmt.Println("📉 CCI显示弱势")
+	} else {
+		fmt.Println("➡️  CCI中性")
+	}
+
+	// 移动平均线分析
+	if factor.Close > factor.MA5 && factor.MA5 > factor.MA10 && factor.MA10 > factor.MA20 {
+		fmt.Println("📈 短期均线多头排列，趋势向上")
+	} else if factor.Close < factor.MA5 && factor.MA5 < factor.MA10 && factor.MA10 < factor.MA20 {
+		fmt.Println("📉 短期均线空头排列，趋势向下")
+	} else {
+		fmt.Println("➡️  均线趋势不明显")
 	}
 }

@@ -60,13 +60,39 @@ func analyzeSingleStock(code, start, end string) {
 		return
 	}
 
+	if len(klines) < 30 {
+		fmt.Println("数据不足30天，无法进行完整分析")
+		return
+	}
+
+	fmt.Printf("成功获取 %d 条K线数据\n", len(klines))
+
 	// 技术指标分析
 	factors := analysis.CalcFactors(klines)
-	analysis.PrintAnalysis(factors)
+	if len(factors) > 0 {
+		// 设置股票代码
+		for i := range factors {
+			factors[i].Code = code
+		}
+		analysis.PrintAnalysis(factors)
+	}
 
-	// 趋势预测
+	// 风险管理分析
+	fmt.Println("\n" + strings.Repeat("=", 50))
+	riskMetrics := analysis.CalculateRiskMetrics(klines, 0.03) // 假设无风险利率3%
+	analysis.PrintRiskMetrics(riskMetrics)
+
+	// 机器学习预测
+	fmt.Println("\n" + strings.Repeat("=", 50))
+	if len(factors) > 0 {
+		predictor := analysis.NewMLPredictor(klines, factors)
+		mlPredictions := predictor.PredictAll()
+		analysis.PrintMLPredictions(mlPredictions)
+	}
+
+	// 传统趋势预测
+	fmt.Println("\n" + strings.Repeat("=", 50))
 	if len(klines) >= 30 {
-		fmt.Println()
 		prediction := analysis.PredictTrend(klines)
 		analysis.PrintPrediction(prediction, code)
 
@@ -99,8 +125,11 @@ func analyzeSingleStock(code, start, end string) {
 		}
 
 		// 生成综合分析图表
-		if err := analysis.GenerateAnalysisChart(klines, factors, prediction, backtestResult, code, start, end); err != nil {
-			fmt.Printf("生成综合分析图表失败: %v\n", err)
+		if len(factors) > 0 {
+			latestFactors := factors[len(factors)-1]
+			if err := analysis.GenerateAnalysisChart(klines, latestFactors, prediction, backtestResult, code, start, end); err != nil {
+				fmt.Printf("生成综合分析图表失败: %v\n", err)
+			}
 		}
 
 		fmt.Println("图表生成完成！请在charts目录中查看HTML文件。")
@@ -153,4 +182,14 @@ func analyzeMultipleStocks(codes []string, start, end string) {
 	// 执行对比分析
 	comparison := analysis.AnalyzeMultipleStocks(stockData)
 	analysis.PrintComparison(comparison)
+
+	// 风险对比分析
+	fmt.Println("\n=== 风险指标对比 ===")
+	for code, klines := range stockData {
+		if len(klines) >= 30 {
+			fmt.Printf("\n--- %s 风险分析 ---\n", code)
+			riskMetrics := analysis.CalculateRiskMetrics(klines, 0.03)
+			analysis.PrintRiskMetrics(riskMetrics)
+		}
+	}
 }
