@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -95,7 +96,6 @@ func FetchTencentKlines(code, start, end string) ([]Kline, error) {
 		return nil, fmt.Errorf("http status: %d", resp.StatusCode)
 	}
 	data, _ := ioutil.ReadAll(resp.Body)
-	fmt.Printf("返回数据长度: %d\n", len(data))
 	if len(data) > 500 {
 		fmt.Printf("返回数据前500字符: %s\n", string(data[:500]))
 	} else {
@@ -106,10 +106,8 @@ func FetchTencentKlines(code, start, end string) ([]Kline, error) {
 	if err != nil {
 		return nil, fmt.Errorf("JSON解析失败: %v", err)
 	}
-	fmt.Printf("解析后的数据结构: %+v\n", tr)
 	var klines []Kline
 	if stockData, exists := tr.Data[tencentCode]; exists {
-		fmt.Printf("找到股票数据，K线数量: %d\n", len(stockData.Qfqday))
 		for _, item := range stockData.Qfqday {
 			if len(item) < 6 {
 				continue
@@ -130,13 +128,48 @@ func FetchTencentKlines(code, start, end string) ([]Kline, error) {
 			})
 		}
 	} else {
-		fmt.Printf("未找到股票代码 %s 的数据\n", tencentCode)
-		fmt.Printf("可用的股票代码: ")
 		for k := range tr.Data {
 			fmt.Printf("%s ", k)
 		}
 		fmt.Println()
 	}
-	fmt.Printf("解析到 %d 条K线数据\n", len(klines))
+	return klines, nil
+}
+
+// 从本地CSV文件读取K线数据，兼容Yahoo等标准格式
+func FetchCSVKlines(filename string) ([]Kline, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	var klines []Kline
+	for i, rec := range records {
+		if i == 0 { // 跳过表头
+			continue
+		}
+		if len(rec) < 6 {
+			continue
+		}
+		date, _ := time.Parse("2006-01-02", rec[0])
+		open, _ := strconv.ParseFloat(rec[1], 64)
+		high, _ := strconv.ParseFloat(rec[2], 64)
+		low, _ := strconv.ParseFloat(rec[3], 64)
+		closep, _ := strconv.ParseFloat(rec[4], 64)
+		volume, _ := strconv.ParseInt(rec[6], 10, 64)
+		klines = append(klines, Kline{
+			Date:   date,
+			Open:   open,
+			High:   high,
+			Low:    low,
+			Close:  closep,
+			Volume: volume,
+		})
+	}
 	return klines, nil
 }
