@@ -3,6 +3,8 @@ package main
 import (
 	"Quantix/analysis"
 	"Quantix/data"
+	"Quantix/config"
+	"Quantix/api"
 	"fmt"
 	"os"
 	"strconv"
@@ -11,6 +13,19 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "web" {
+		// 启动Web API服务器
+		cfg, err := config.LoadConfig("config.yaml")
+		if err != nil {
+			panic(err)
+		}
+		server := api.NewServer(cfg)
+		if err := server.Start(); err != nil {
+			panic(err)
+		}
+		return
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Println("用法:")
 		fmt.Println("  单股票分析: Quantix <股票代码> [开始日期] [结束日期]")

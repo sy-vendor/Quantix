@@ -293,3 +293,17 @@ func ScoreStocksByFactors(stockData map[string][]data.Kline, factors []FactorWei
 
 	return comparison
 }
+
+// CompareStocks 统一对外接口
+func CompareStocks(codes []string, start, end string, factors []string, weights []float64) StockComparison {
+	// 1. 获取每只股票的K线数据
+	stockData := make(map[string][]data.Kline)
+	for _, code := range codes {
+		klines, err := data.FetchYahooKlines(code, start, end)
+		if err == nil && len(klines) > 0 {
+			stockData[code] = klines
+		}
+	}
+	// 2. 默认用 AnalyzeMultipleStocks
+	return AnalyzeMultipleStocks(stockData)
+}
