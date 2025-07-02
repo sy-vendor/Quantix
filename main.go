@@ -212,14 +212,14 @@ func mainMenu() {
 				fmt.Println("用法: show <文件名>")
 			}
 		} else if input == "new" || input == "1" {
-			aiAnalysisInteractive()
+			aiAnalysisInteractiveMenu()
 		} else {
 			fmt.Println("无效指令，请重试。")
 		}
 	}
 }
 
-func aiAnalysisInteractive() {
+func aiAnalysisInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 	apiKey := promptForAPIKey()
 	fmt.Println("正在获取可用 DeepSeek 模型...")
@@ -269,6 +269,41 @@ func aiAnalysisInteractive() {
 	if lang == "" {
 		lang = "zh"
 	}
+	fmt.Print("请选择导出格式（可多选，逗号分隔，支持md,html,pdf，默认md）: ")
+	exportInput, _ := reader.ReadString('\n')
+	exportInput = strings.TrimSpace(exportInput)
+	exportFormats := splitAndTrim(exportInput)
+	if len(exportFormats) == 0 || exportFormats[0] == "" {
+		exportFormats = []string{"md"}
+	}
+	fmt.Print("如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）: ")
+	emailInput, _ := reader.ReadString('\n')
+	emailInput = strings.TrimSpace(emailInput)
+	emails := splitAndTrim(emailInput)
+	var smtpServer, smtpUser, smtpPass string
+	var smtpPort int
+	if len(emails) > 0 && emails[0] != "" {
+		fmt.Print("SMTP服务器: ")
+		smtpServer, _ = reader.ReadString('\n')
+		smtpServer = strings.TrimSpace(smtpServer)
+		fmt.Print("SMTP端口(默认465): ")
+		portInput, _ := reader.ReadString('\n')
+		portInput = strings.TrimSpace(portInput)
+		if portInput == "" {
+			smtpPort = 465
+		} else {
+			smtpPort, _ = strconv.Atoi(portInput)
+		}
+		fmt.Print("SMTP用户名: ")
+		smtpUser, _ = reader.ReadString('\n')
+		smtpUser = strings.TrimSpace(smtpUser)
+		fmt.Print("SMTP密码: ")
+		smtpPass, _ = reader.ReadString('\n')
+		smtpPass = strings.TrimSpace(smtpPass)
+	}
+	fmt.Print("如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）: ")
+	webhook, _ := reader.ReadString('\n')
+	webhook = strings.TrimSpace(webhook)
 	params := analysis.AnalysisParams{
 		APIKey:     apiKey,
 		Model:      model,
@@ -292,6 +327,34 @@ func aiAnalysisInteractive() {
 		} else {
 			fmt.Println(r.Report)
 			fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+			var attachs []string
+			for _, fmtx := range exportFormats {
+				fname, err := analysis.ExportReport(r, fmtx)
+				if err == nil && fname != "" {
+					fmt.Printf("[已导出: %s]\n", fname)
+					if fmtx == "pdf" || fmtx == "md" || fmtx == "html" {
+						attachs = append(attachs, "history/"+fname)
+					}
+				}
+			}
+			// 邮件推送
+			if len(emails) > 0 && emails[0] != "" && smtpServer != "" && smtpUser != "" && smtpPass != "" {
+				err := analysis.SendEmail(smtpServer, smtpPort, smtpUser, smtpPass, emails, "Quantix分析报告", r.Report, attachs)
+				if err != nil {
+					fmt.Println("[邮件发送失败]", err)
+				} else {
+					fmt.Println("[邮件已发送]")
+				}
+			}
+			// IM推送
+			if webhook != "" {
+				err := analysis.SendWebhook(webhook, r.Report)
+				if err != nil {
+					fmt.Println("[IM推送失败]", err)
+				} else {
+					fmt.Println("[IM已推送]")
+				}
+			}
 		}
 	}
 }
@@ -338,6 +401,13 @@ func main() {
 	historyFlag := flag.Bool("history", false, "列出分析历史记录")
 	showFlag := flag.String("show", "", "显示指定历史分析记录")
 	scheduleFlag := flag.String("schedule", "", "定时任务周期，如 1h、daily（预留）")
+	exportFlag := flag.String("export", "md", "导出格式，逗号分隔，支持md,html,pdf")
+	emailFlag := flag.String("email", "", "收件人邮箱，逗号分隔")
+	smtpServerFlag := flag.String("smtp-server", "", "SMTP服务器")
+	smtpPortFlag := flag.Int("smtp-port", 465, "SMTP端口")
+	smtpUserFlag := flag.String("smtp-user", "", "SMTP用户名")
+	smtpPassFlag := flag.String("smtp-pass", "", "SMTP密码")
+	webhookFlag := flag.String("webhook", "", "IM webhook地址")
 	flag.Parse()
 
 	if *historyFlag {
@@ -366,6 +436,11 @@ func main() {
 			Scope:      splitAndTrim(*scopeFlag),
 			Lang:       *langFlag,
 		}
+		emails := splitAndTrim(*emailFlag)
+		exportFormats := splitAndTrim(*exportFlag)
+		if len(exportFormats) == 0 || exportFormats[0] == "" {
+			exportFormats = []string{"md"}
+		}
 		if schedule := strings.TrimSpace(os.Getenv("SCHEDULE")); schedule != "" {
 			fmt.Println("[定时任务] 环境变量 SCHEDULE 已设置，优先生效。")
 			*scheduleFlag = schedule
@@ -387,6 +462,32 @@ func main() {
 					} else {
 						fmt.Println(r.Report)
 						fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+						var attachs []string
+						for _, fmtx := range exportFormats {
+							fname, err := analysis.ExportReport(r, fmtx)
+							if err == nil && fname != "" {
+								fmt.Printf("[已导出: %s]\n", fname)
+								if fmtx == "pdf" || fmtx == "md" || fmtx == "html" {
+									attachs = append(attachs, "history/"+fname)
+								}
+							}
+						}
+						if len(emails) > 0 && emails[0] != "" && *smtpServerFlag != "" && *smtpUserFlag != "" && *smtpPassFlag != "" {
+							err := analysis.SendEmail(*smtpServerFlag, *smtpPortFlag, *smtpUserFlag, *smtpPassFlag, emails, "Quantix分析报告", r.Report, attachs)
+							if err != nil {
+								fmt.Println("[邮件发送失败]", err)
+							} else {
+								fmt.Println("[邮件已发送]")
+							}
+						}
+						if *webhookFlag != "" {
+							err := analysis.SendWebhook(*webhookFlag, r.Report)
+							if err != nil {
+								fmt.Println("[IM推送失败]", err)
+							} else {
+								fmt.Println("[IM已推送]")
+							}
+						}
 					}
 				}
 				fmt.Printf("[定时任务] 下一次将在 %s 后运行，Ctrl+C 可终止。\n", dur)
@@ -405,6 +506,32 @@ func main() {
 			} else {
 				fmt.Println(r.Report)
 				fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+				var attachs []string
+				for _, fmtx := range exportFormats {
+					fname, err := analysis.ExportReport(r, fmtx)
+					if err == nil && fname != "" {
+						fmt.Printf("[已导出: %s]\n", fname)
+						if fmtx == "pdf" || fmtx == "md" || fmtx == "html" {
+							attachs = append(attachs, "history/"+fname)
+						}
+					}
+				}
+				if len(emails) > 0 && emails[0] != "" && *smtpServerFlag != "" && *smtpUserFlag != "" && *smtpPassFlag != "" {
+					err := analysis.SendEmail(*smtpServerFlag, *smtpPortFlag, *smtpUserFlag, *smtpPassFlag, emails, "Quantix分析报告", r.Report, attachs)
+					if err != nil {
+						fmt.Println("[邮件发送失败]", err)
+					} else {
+						fmt.Println("[邮件已发送]")
+					}
+				}
+				if *webhookFlag != "" {
+					err := analysis.SendWebhook(*webhookFlag, r.Report)
+					if err != nil {
+						fmt.Println("[IM推送失败]", err)
+					} else {
+						fmt.Println("[IM已推送]")
+					}
+				}
 			}
 		}
 		return
