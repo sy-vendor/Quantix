@@ -2,288 +2,238 @@ package main
 
 import (
 	"Quantix/analysis"
-	"Quantix/data"
 	"Quantix/config"
-	"Quantix/api"
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "web" {
-		// 启动Web API服务器
-		cfg, err := config.LoadConfig("config.yaml")
-		if err != nil {
-			panic(err)
-		}
-		server := api.NewServer(cfg)
-		if err := server.Start(); err != nil {
-			panic(err)
-		}
-		return
-	}
-
-	if len(os.Args) < 2 {
-		fmt.Println("用法:")
-		fmt.Println("  单股票分析: Quantix <股票代码> [开始日期] [结束日期]")
-		fmt.Println("  多股票对比: Quantix <股票代码1,股票代码2,...> [开始日期] [结束日期] [--factors=因子1,因子2,...] [--weights=w1,w2,...] [--csv=文件1,文件2,...]")
-		fmt.Println("示例:")
-		fmt.Println("  Quantix AAPL 2023-01-01 2023-12-31")
-		fmt.Println("  Quantix 000001.SZ,600519.SH 2024-01-01 2024-04-01 --factors=Momentum,RSI,MACD --weights=0.3,0.4,0.3 --csv=AAPL.csv,MSFT.csv")
-		return
-	}
-
-	codes := strings.Split(os.Args[1], ",")
-	start := "2023-01-01"
-	end := "2023-12-31"
-	factorsArg := ""
-	weightsArg := ""
-	csvArg := ""
-	if len(os.Args) >= 4 {
-		start = os.Args[2]
-		end = os.Args[3]
-	}
-	// 解析额外参数
-	for _, arg := range os.Args[4:] {
-		if strings.HasPrefix(arg, "--factors=") {
-			factorsArg = strings.TrimPrefix(arg, "--factors=")
-		}
-		if strings.HasPrefix(arg, "--weights=") {
-			weightsArg = strings.TrimPrefix(arg, "--weights=")
-		}
-		if strings.HasPrefix(arg, "--csv=") {
-			csvArg = strings.TrimPrefix(arg, "--csv=")
-		}
-	}
-
-	if len(codes) == 1 {
-		// 单股票分析
-		analyzeSingleStockWithCSV(codes[0], start, end, csvArg)
-	} else {
-		// 多股票对比分析
-		analyzeMultipleStocksWithFactorsAndCSV(codes, start, end, factorsArg, weightsArg, csvArg)
-	}
+func promptForAPIKey() string {
+	fmt.Print("请输入 DeepSeek API Key: ")
+	reader := bufio.NewReader(os.Stdin)
+	key, _ := reader.ReadString('\n')
+	return strings.TrimSpace(key)
 }
 
-// 单股票分析，支持本地CSV
-func analyzeSingleStockWithCSV(code, start, end, csvArg string) {
-	var klines []data.Kline
-	var err error
-	if csvArg != "" {
-		// 只取第一个csv文件
-		csvFiles := strings.Split(csvArg, ",")
-		klines, err = data.FetchCSVKlines(csvFiles[0])
-		if err != nil {
-			fmt.Println("本地CSV读取失败:", err)
-			return
-		}
-		fmt.Printf("[本地CSV] 读取 %s，共 %d 条K线数据\n", csvFiles[0], len(klines))
-	} else if len(code) > 3 && (code[len(code)-3:] == ".SZ" || code[len(code)-3:] == ".SH") {
-		// A股
-		startDate, _ := time.Parse("2006-01-02", start)
-		endDate, _ := time.Parse("2006-01-02", end)
-		startStr := startDate.Format("2006-01-02")
-		endStr := endDate.Format("2006-01-02")
-		fmt.Printf("[A股] 获取 %s 从 %s 到 %s 的行情数据...\n", code, startStr, endStr)
-		klines, err = data.FetchTencentKlines(code, startStr, endStr)
-	} else {
-		// 美股/港股
-		fmt.Printf("[美股/港股] 获取 %s 从 %s 到 %s 的行情数据...\n", code, start, end)
-		klines, err = data.FetchYahooKlines(code, start, end)
-	}
-
+func fetchDeepSeekModels(apiKey string, _ string) ([]string, error) {
+	// 直接用 DeepSeek 官方 API
+	req, err := http.NewRequest("GET", "https://api.deepseek.com/models", nil)
 	if err != nil {
-		fmt.Println("数据获取失败:", err)
-		return
+		return nil, err
 	}
-
-	if len(klines) < 30 {
-		fmt.Println("数据不足30天，无法进行完整分析")
-		return
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-
-	fmt.Printf("成功获取 %d 条K线数据\n", len(klines))
-
-	// 技术指标分析
-	factors := analysis.CalcFactors(klines)
-	if len(factors) > 0 {
-		// 设置股票代码
-		for i := range factors {
-			factors[i].Code = code
-		}
-		analysis.PrintAnalysis(factors)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("http status: %d", resp.StatusCode)
 	}
-
-	// 风险管理分析
-	fmt.Println("\n" + strings.Repeat("=", 50))
-	riskMetrics := analysis.CalculateRiskMetrics(klines, 0.03) // 假设无风险利率3%
-	analysis.PrintRiskMetrics(riskMetrics)
-
-	// 机器学习预测
-	fmt.Println("\n" + strings.Repeat("=", 50))
-	if len(factors) > 0 {
-		predictor := analysis.NewMLPredictor(klines, factors)
-		mlPredictions := predictor.PredictAll()
-		analysis.PrintMLPredictions(mlPredictions)
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
 	}
-
-	// 传统趋势预测
-	fmt.Println("\n" + strings.Repeat("=", 50))
-	if len(klines) >= 30 {
-		prediction := analysis.PredictTrend(klines)
-		analysis.PrintPrediction(prediction, code)
-
-		// 多策略回测
-		fmt.Println()
-		analysis.RunMultiStrategyBacktest(klines)
-
-		// 生成图表
-		fmt.Println("\n=== 生成图表 ===")
-
-		// 生成K线图
-		if err := analysis.GenerateKlineChart(klines, code, start, end); err != nil {
-			fmt.Printf("生成K线图失败: %v\n", err)
-		}
-
-		// 执行单次回测用于图表生成
-		config := analysis.BacktestConfig{
-			InitialCapital: 100000,
-			PositionSize:   0.7,
-			StopLoss:       0.08,
-			TakeProfit:     0.15,
-			MinHoldDays:    3,
-			MaxHoldDays:    15,
-		}
-		backtestResult := analysis.RunBacktest(klines, config)
-
-		// 生成回测图表
-		if err := analysis.GenerateBacktestChart(klines, backtestResult, code, start, end); err != nil {
-			fmt.Printf("生成回测图表失败: %v\n", err)
-		}
-
-		// 生成综合分析图表
-		if len(factors) > 0 {
-			latestFactors := factors[len(factors)-1]
-			if err := analysis.GenerateAnalysisChart(klines, latestFactors, prediction, backtestResult, code, start, end); err != nil {
-				fmt.Printf("生成综合分析图表失败: %v\n", err)
-			}
-		}
-
-		fmt.Println("图表生成完成！请在charts目录中查看HTML文件。")
-	} else {
-		fmt.Println("\n数据不足30天，无法进行趋势预测和回测")
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		return nil, err
 	}
+	models := make([]string, 0, len(result.Data))
+	for _, m := range result.Data {
+		models = append(models, m.ID)
+	}
+	return models, nil
 }
 
-// 多股票对比分析，支持本地CSV
-func analyzeMultipleStocksWithFactorsAndCSV(codes []string, start, end, factorsArg, weightsArg, csvArg string) {
-	fmt.Printf("开始多股票对比分析，共 %d 只股票\n", len(codes))
-
-	stockData := make(map[string][]data.Kline)
-	csvFiles := map[string]string{}
-	if csvArg != "" {
-		csvArr := strings.Split(csvArg, ",")
-		for i, csvFile := range csvArr {
-			if i < len(codes) {
-				csvFiles[codes[i]] = csvFile
-			}
-		}
+func promptForModel(models []string) string {
+	fmt.Println("可用 DeepSeek 模型列表:")
+	for i, m := range models {
+		fmt.Printf("[%d] %s\n", i, m)
 	}
-
-	for _, code := range codes {
-		code = strings.TrimSpace(code)
-		if code == "" {
-			continue
-		}
-
-		var klines []data.Kline
-		var err error
-		if csvFile, ok := csvFiles[code]; ok && csvFile != "" {
-			klines, err = data.FetchCSVKlines(csvFile)
-			if err != nil {
-				fmt.Printf("本地CSV读取失败(%s): %v\n", csvFile, err)
-				continue
-			}
-			fmt.Printf("[本地CSV] 读取 %s，共 %d 条K线数据\n", csvFile, len(klines))
-		} else if len(code) > 3 && (code[len(code)-3:] == ".SZ" || code[len(code)-3:] == ".SH") {
-			// A股
-			startDate, _ := time.Parse("2006-01-02", start)
-			endDate, _ := time.Parse("2006-01-02", end)
-			startStr := startDate.Format("2006-01-02")
-			endStr := endDate.Format("2006-01-02")
-			fmt.Printf("[A股] 获取 %s 从 %s 到 %s 的行情数据...\n", code, startStr, endStr)
-			klines, err = data.FetchTencentKlines(code, startStr, endStr)
-		} else {
-			// 美股/港股
-			fmt.Printf("[美股/港股] 获取 %s 从 %s 到 %s 的行情数据...\n", code, start, end)
-			klines, err = data.FetchYahooKlines(code, start, end)
-		}
-
-		if err != nil {
-			fmt.Printf("获取 %s 数据失败: %v\n", code, err)
-			continue
-		}
-
-		stockData[code] = klines
-		fmt.Printf("成功获取 %s 数据，共 %d 条记录\n", code, len(klines))
+	fmt.Print("请输入模型编号: ")
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	idx := 0
+	fmt.Sscanf(input, "%d", &idx)
+	if idx < 0 || idx >= len(models) {
+		fmt.Println("输入无效，默认选择第一个模型")
+		idx = 0
 	}
+	return models[idx]
+}
 
-	if len(stockData) == 0 {
-		fmt.Println("没有成功获取任何股票数据")
-		return
+func promptForSearchMode() bool {
+	fmt.Println("请选择分析模式:")
+	fmt.Println("[1] 深度思考（仅用模型推理）")
+	fmt.Println("[2] 联网搜索（结合最新互联网信息）")
+	fmt.Print("请输入模式编号（默认1）: ")
+	reader := bufio.NewReader(os.Stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input == "2" {
+		return true // 联网搜索
 	}
+	return false // 深度思考
+}
 
-	// 解析因子和权重
-	var factors []analysis.FactorWeight
-	if factorsArg != "" {
-		fNames := strings.Split(factorsArg, ",")
-		var weights []float64
-		if weightsArg != "" {
-			wStrs := strings.Split(weightsArg, ",")
-			for _, w := range wStrs {
-				f, err := strconv.ParseFloat(w, 64)
-				if err == nil {
-					weights = append(weights, f)
-				}
-			}
-		}
-		for i, name := range fNames {
-			fw := analysis.FactorWeight{Name: name, Weight: 0.0}
-			if i < len(weights) {
-				fw.Weight = weights[i]
-			} else {
-				fw.Weight = 1.0 / float64(len(fNames)) // 未指定权重时均分
-			}
-			factors = append(factors, fw)
-		}
-		// 权重归一化
-		sum := 0.0
-		for _, fw := range factors {
-			sum += fw.Weight
-		}
-		if sum > 0 {
-			for i := range factors {
-				factors[i].Weight /= sum
-			}
-		}
+func promptForPredictionOptions() (periods, dims, outputFormat, searchScope []string, needConfidence bool, riskPref string) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("请选择预测周期（可多选，用逗号分隔，默认1周,1月,3月）：")
+	fmt.Println("可选：1天,1周,1月,3月,半年,1年")
+	fmt.Print("输入: ")
+	periodInput, _ := reader.ReadString('\n')
+	periodInput = strings.TrimSpace(periodInput)
+	if periodInput == "" {
+		periods = []string{"1周", "1月", "3月"}
 	} else {
-		factors = analysis.DefaultFactors
+		periods = splitAndTrim(periodInput)
 	}
 
-	// 多因子打分与排名
-	comparison := analysis.ScoreStocksByFactors(stockData, factors)
-	analysis.PrintComparison(comparison)
+	fmt.Println("请选择分析维度（可多选，用逗号分隔，默认技术面,基本面）：")
+	fmt.Println("可选：技术面,基本面,资金面,行业对比,情绪分析")
+	fmt.Print("输入: ")
+	dimInput, _ := reader.ReadString('\n')
+	dimInput = strings.TrimSpace(dimInput)
+	if dimInput == "" {
+		dims = []string{"技术面", "基本面"}
+	} else {
+		dims = splitAndTrim(dimInput)
+	}
 
-	// 风险对比分析
-	fmt.Println("\n=== 风险指标对比 ===")
-	for code, klines := range stockData {
-		if len(klines) >= 30 {
-			fmt.Printf("\n--- %s 风险分析 ---\n", code)
-			riskMetrics := analysis.CalculateRiskMetrics(klines, 0.03)
-			analysis.PrintRiskMetrics(riskMetrics)
+	fmt.Println("请选择输出格式（默认结构化表格）：")
+	fmt.Println("可选：结构化表格,要点,详细长文,摘要")
+	fmt.Print("输入: ")
+	outInput, _ := reader.ReadString('\n')
+	outInput = strings.TrimSpace(outInput)
+	if outInput == "" {
+		outputFormat = []string{"结构化表格"}
+	} else {
+		outputFormat = splitAndTrim(outInput)
+	}
+
+	fmt.Print("是否需要置信度/概率说明？(Y/N, 默认Y): ")
+	confInput, _ := reader.ReadString('\n')
+	confInput = strings.TrimSpace(confInput)
+	needConfidence = (confInput == "" || confInput == "Y" || confInput == "y")
+
+	fmt.Println("请选择风险/机会偏好（默认保守）：")
+	fmt.Println("可选：保守,激进,风险为主,机会为主")
+	fmt.Print("输入: ")
+	riskInput, _ := reader.ReadString('\n')
+	riskInput = strings.TrimSpace(riskInput)
+	if riskInput == "" {
+		riskPref = "保守"
+	} else {
+		riskPref = riskInput
+	}
+
+	fmt.Println("请选择联网搜索内容范围（可多选，用逗号分隔，默认新闻,公告）：")
+	fmt.Println("可选：新闻,研报,公告,论坛")
+	fmt.Print("输入: ")
+	scopeInput, _ := reader.ReadString('\n')
+	scopeInput = strings.TrimSpace(scopeInput)
+	if scopeInput == "" {
+		searchScope = []string{"新闻", "公告"}
+	} else {
+		searchScope = splitAndTrim(scopeInput)
+	}
+
+	return
+}
+
+func splitAndTrim(s string) []string {
+	arr := strings.Split(s, ",")
+	for i := range arr {
+		arr[i] = strings.TrimSpace(arr[i])
+	}
+	return arr
+}
+
+func main() {
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		panic(err)
+	}
+	config.GlobalConfig = cfg
+
+	apiKey := promptForAPIKey()
+	fmt.Println("正在获取可用 DeepSeek 模型...")
+	models, err := fetchDeepSeekModels(apiKey, "")
+	deepseekModels := make([]string, 0)
+	for _, m := range models {
+		if strings.Contains(m, "deepseek") {
+			deepseekModels = append(deepseekModels, m)
 		}
+	}
+	model := ""
+	if err == nil && len(deepseekModels) > 0 {
+		model = promptForModel(deepseekModels)
+	} else {
+		fmt.Println("未找到可用的 DeepSeek 模型，可手动输入模型名（如 deepseek/deepseek-r1:free）")
+		reader := bufio.NewReader(os.Stdin)
+		model, _ = reader.ReadString('\n')
+		model = strings.TrimSpace(model)
+	}
+
+	fmt.Print("请输入股票代码: ")
+	reader := bufio.NewReader(os.Stdin)
+	stockCode, _ := reader.ReadString('\n')
+	stockCode = strings.TrimSpace(stockCode)
+
+	today := time.Now()
+	defaultEnd := today.Format("2006-01-02")
+	defaultStart := today.AddDate(0, 0, -30).Format("2006-01-02")
+	fmt.Printf("请输入开始日期(YYYY-MM-DD, 默认%s): ", defaultStart)
+	start, _ := reader.ReadString('\n')
+	start = strings.TrimSpace(start)
+	if start == "" {
+		start = defaultStart
+	}
+	fmt.Printf("请输入结束日期(YYYY-MM-DD, 默认%s): ", defaultEnd)
+	end, _ := reader.ReadString('\n')
+	end = strings.TrimSpace(end)
+	if end == "" {
+		end = defaultEnd
+	}
+
+	searchMode := promptForSearchMode()
+	periods, dims, outputFormat, searchScope, needConfidence, riskPref := promptForPredictionOptions()
+
+	fmt.Println("\n=== AI 智能分析报告 ===")
+	prompt := fmt.Sprintf(
+		"请对股票代码 %s 在 %s 到 %s 期间的行情进行详细分析，内容包括：\n"+
+			"1. 分析维度：%s\n"+
+			"2. 预测周期：%s\n"+
+			"3. 输出格式：%s\n"+
+			"4. 联网搜索内容范围：%s\n"+
+			"5. 风险/机会偏好：%s\n"+
+			"6. %s\n"+
+			"请结合以上要求，输出结构化、分段、要点或表格内容。",
+		stockCode, start, end,
+		strings.Join(dims, ", "),
+		strings.Join(periods, ", "),
+		strings.Join(outputFormat, ", "),
+		strings.Join(searchScope, ", "),
+		riskPref,
+		func() string {
+			if needConfidence {
+				return "请对每个预测结论给出置信度或概率区间，并简要说明理由。"
+			}
+			return ""
+		}(),
+	)
+	report, err := analysis.GenerateAIReportWithConfigAndSearch(stockCode, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
+	if err != nil {
+		fmt.Println("[AI] 生成失败:", err)
+	} else {
+		fmt.Println(report)
 	}
 }

@@ -33,4 +33,13 @@ ml:
 log:
   level: "info"
   format: "json"
-  output: "stdout" 
+  output: "stdout"
+
+deepseek:
+  api_url: "https://openrouter.ai/api/v1/chat/completions"
+
+model:
+  model_path: "./models"
+  confidence_threshold: 0.7
+  max_features: 20
+  cross_validation: true 

@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+var GlobalConfig *Config
+
 // Config 应用配置结构
 type Config struct {
 	Server   ServerConfig   `mapstructure:"server"`
@@ -18,6 +20,7 @@ type Config struct {
 	Data     DataConfig     `mapstructure:"data"`
 	ML       MLConfig       `mapstructure:"ml"`
 	Log      LogConfig      `mapstructure:"log"`
+	DeepSeek DeepSeekConfig `mapstructure:"deepseek"`
 }
 
 // ServerConfig 服务器配置
@@ -67,6 +70,11 @@ type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
 	Output string `mapstructure:"output"`
+}
+
+// DeepSeekConfig 深度搜索配置
+type DeepSeekConfig struct {
+	APIURL string `mapstructure:"api_url"`
 }
 
 // LoadConfig 加载配置
