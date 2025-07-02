@@ -2,7 +2,6 @@ package main
 
 import (
 	"Quantix/analysis"
-	"Quantix/config"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -158,12 +157,6 @@ func splitAndTrim(s string) []string {
 }
 
 func main() {
-	cfg, err := config.LoadConfig("config.yaml")
-	if err != nil {
-		panic(err)
-	}
-	config.GlobalConfig = cfg
-
 	apiKey := promptForAPIKey()
 	fmt.Println("正在获取可用 DeepSeek 模型...")
 	models, err := fetchDeepSeekModels(apiKey, "")
