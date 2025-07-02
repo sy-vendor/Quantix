@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -191,7 +192,7 @@ func mainMenu() {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Println("\n=== Quantix 主菜单 ===")
-		fmt.Println("1. new      - 新建AI分析")
+		fmt.Println("1. new      - 新建AI分析（支持批量，股票代码用逗号分隔）")
 		fmt.Println("2. history  - 查看历史记录列表")
 		fmt.Println("3. show <文件名> - 查看指定历史分析")
 		fmt.Println("4. exit     - 退出程序")
@@ -202,11 +203,11 @@ func mainMenu() {
 			fmt.Println("再见！")
 			return
 		} else if input == "history" || input == "2" {
-			listHistoryFiles()
+			analysis.ListHistoryFiles()
 		} else if strings.HasPrefix(input, "show ") {
 			parts := strings.SplitN(input, " ", 2)
 			if len(parts) == 2 {
-				showHistoryFile(parts[1])
+				analysis.ShowHistoryFile(parts[1])
 			} else {
 				fmt.Println("用法: show <文件名>")
 			}
@@ -237,9 +238,14 @@ func aiAnalysisInteractive() {
 		model, _ = reader.ReadString('\n')
 		model = strings.TrimSpace(model)
 	}
-	fmt.Print("请输入股票代码: ")
-	stockCode, _ := reader.ReadString('\n')
-	stockCode = strings.TrimSpace(stockCode)
+	fmt.Print("请输入股票代码（可批量，逗号分隔）: ")
+	stockInput, _ := reader.ReadString('\n')
+	stockInput = strings.TrimSpace(stockInput)
+	stockCodes := splitAndTrim(stockInput)
+	if len(stockCodes) == 0 || stockCodes[0] == "" {
+		fmt.Println("股票代码不能为空！")
+		return
+	}
 	today := time.Now()
 	defaultEnd := today.Format("2006-01-02")
 	defaultStart := today.AddDate(0, 0, -30).Format("2006-01-02")
@@ -263,96 +269,62 @@ func aiAnalysisInteractive() {
 	if lang == "" {
 		lang = "zh"
 	}
-	var prompt string
-	if lang == "en" {
-		prompt = fmt.Sprintf(
-			"Please provide a detailed analysis of stock %s from %s to %s, including:\n"+
-				"1. Analysis dimensions: %s\n"+
-				"2. Prediction periods: %s\n"+
-				"3. Output format: %s\n"+
-				"4. Web search scope: %s\n"+
-				"5. Risk/opportunity preference: %s\n"+
-				"6. %s\n"+
-				"Please output structured, sectioned, key-point or table content as required.",
-			stockCode, start, end,
-			strings.Join(dims, ", "),
-			strings.Join(periods, ", "),
-			strings.Join(outputFormat, ", "),
-			strings.Join(searchScope, ", "),
-			riskPref,
-			func() string {
-				if needConfidence {
-					return "For each prediction, provide a confidence level or probability range, and briefly explain the rationale."
-				}
-				return ""
-			}(),
-		)
-	} else {
-		prompt = fmt.Sprintf(
-			"请对股票代码 %s 在 %s 到 %s 期间的行情进行详细分析，内容包括：\n"+
-				"1. 分析维度：%s\n"+
-				"2. 预测周期：%s\n"+
-				"3. 输出格式：%s\n"+
-				"4. 联网搜索内容范围：%s\n"+
-				"5. 风险/机会偏好：%s\n"+
-				"6. %s\n"+
-				"请结合以上要求，输出结构化、分段、要点或表格内容。",
-			stockCode, start, end,
-			strings.Join(dims, ", "),
-			strings.Join(periods, ", "),
-			strings.Join(outputFormat, ", "),
-			strings.Join(searchScope, ", "),
-			riskPref,
-			func() string {
-				if needConfidence {
-					return "请对每个预测结论给出置信度或概率区间，并简要说明理由。"
-				}
-				return ""
-			}(),
-		)
+	params := analysis.AnalysisParams{
+		APIKey:     apiKey,
+		Model:      model,
+		StockCodes: stockCodes,
+		Start:      start,
+		End:        end,
+		SearchMode: searchMode,
+		Periods:    periods,
+		Dims:       dims,
+		Output:     outputFormat,
+		Confidence: needConfidence,
+		Risk:       riskPref,
+		Scope:      searchScope,
+		Lang:       lang,
 	}
-	fmt.Println("\n=== AI 智能分析报告 ===")
-	report, err := analysis.GenerateAIReportWithConfigAndSearch(stockCode, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
-	if err != nil {
-		fmt.Println("[AI] 生成失败:", err)
-	} else {
-		fmt.Println(report)
+	results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
+	for _, r := range results {
+		fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
+		if r.Err != nil {
+			fmt.Println("[AI] 生成失败:", r.Err)
+		} else {
+			fmt.Println(r.Report)
+			fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+		}
 	}
-	// 保存历史记录
-	hist := map[string]interface{}{
-		"time":  time.Now().Format("2006-01-02 15:04:05"),
-		"stock": stockCode,
-		"start": start,
-		"end":   end,
-		"model": model,
-		"mode": func() string {
-			if searchMode {
-				return "search"
-			} else {
-				return "reason"
-			}
-		}(),
-		"periods":    periods,
-		"dims":       dims,
-		"output":     outputFormat,
-		"confidence": needConfidence,
-		"risk":       riskPref,
-		"scope":      searchScope,
-		"lang":       lang,
-		"prompt":     prompt,
-		"report":     report,
+}
+
+func parseSchedule(s string) (time.Duration, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "daily" {
+		now := time.Now()
+		next := now.AddDate(0, 0, 1).Truncate(24 * time.Hour)
+		return next.Sub(now), nil
 	}
-	fname := fmt.Sprintf("%s-%s-%s.json", stockCode, end, time.Now().Format("150405"))
-	fpath := filepath.Join("history", fname)
-	b, _ := json.MarshalIndent(hist, "", "  ")
-	_ = ioutil.WriteFile(fpath, b, 0644)
+	if strings.HasSuffix(s, "h") {
+		h, err := strconv.Atoi(strings.TrimSuffix(s, "h"))
+		if err != nil || h <= 0 {
+			return 0, fmt.Errorf("无效的小时数")
+		}
+		return time.Duration(h) * time.Hour, nil
+	}
+	if strings.HasSuffix(s, "m") {
+		m, err := strconv.Atoi(strings.TrimSuffix(s, "m"))
+		if err != nil || m <= 0 {
+			return 0, fmt.Errorf("无效的分钟数")
+		}
+		return time.Duration(m) * time.Minute, nil
+	}
+	return 0, fmt.Errorf("不支持的定时格式，仅支持 10m、1h、daily 等")
 }
 
 func main() {
 	// 命令行参数模式：有参数则分析一次后退出，无参数则进入主菜单
 	apiKeyFlag := flag.String("apikey", "", "DeepSeek API Key")
 	modelFlag := flag.String("model", "", "DeepSeek 模型名")
-	stockFlag := flag.String("stock", "", "股票代码")
+	stockFlag := flag.String("stock", "", "股票代码（可批量，逗号分隔）")
 	startFlag := flag.String("start", "", "开始日期 YYYY-MM-DD")
 	endFlag := flag.String("end", "", "结束日期 YYYY-MM-DD")
 	modeFlag := flag.String("mode", "", "分析模式: reason/search")
@@ -365,22 +337,76 @@ func main() {
 	langFlag := flag.String("lang", "zh", "分析语言 zh/en")
 	historyFlag := flag.Bool("history", false, "列出分析历史记录")
 	showFlag := flag.String("show", "", "显示指定历史分析记录")
+	scheduleFlag := flag.String("schedule", "", "定时任务周期，如 1h、daily（预留）")
 	flag.Parse()
 
 	if *historyFlag {
-		listHistoryFiles()
+		analysis.ListHistoryFiles()
 		return
 	}
 	if *showFlag != "" {
-		showHistoryFile(*showFlag)
+		analysis.ShowHistoryFile(*showFlag)
 		return
 	}
 	// 判断是否为命令行参数模式
-	if *apiKeyFlag != "" || *modelFlag != "" || *stockFlag != "" || *startFlag != "" || *endFlag != "" || *modeFlag != "" || *periodsFlag != "" || *dimsFlag != "" || *outputFlag != "" || *confidenceFlag != "" || *riskFlag != "" || *scopeFlag != "" || *langFlag != "zh" {
-		// 保持原有参数优先分析逻辑
-		// ...（原有参数模式分析代码，保存历史后直接 return）...
-		// 复制原有参数模式分析代码到此处
-		// ... existing code ...
+	if *apiKeyFlag != "" && *modelFlag != "" && *stockFlag != "" {
+		stockCodes := splitAndTrim(*stockFlag)
+		params := analysis.AnalysisParams{
+			APIKey:     *apiKeyFlag,
+			Model:      *modelFlag,
+			StockCodes: stockCodes,
+			Start:      *startFlag,
+			End:        *endFlag,
+			SearchMode: (*modeFlag == "search"),
+			Periods:    splitAndTrim(*periodsFlag),
+			Dims:       splitAndTrim(*dimsFlag),
+			Output:     splitAndTrim(*outputFlag),
+			Confidence: (*confidenceFlag == "Y" || *confidenceFlag == "y"),
+			Risk:       *riskFlag,
+			Scope:      splitAndTrim(*scopeFlag),
+			Lang:       *langFlag,
+		}
+		if schedule := strings.TrimSpace(os.Getenv("SCHEDULE")); schedule != "" {
+			fmt.Println("[定时任务] 环境变量 SCHEDULE 已设置，优先生效。")
+			*scheduleFlag = schedule
+		}
+		if schedule := strings.TrimSpace(*scheduleFlag); schedule != "" {
+			dur, err := parseSchedule(schedule)
+			if err != nil {
+				fmt.Println("[定时任务] 格式错误：", err)
+				return
+			}
+			fmt.Printf("[定时任务] 启动，周期：%s\n", schedule)
+			for {
+				fmt.Printf("\n[%s] 批量分析开始\n", time.Now().Format("2006-01-02 15:04:05"))
+				results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
+				for _, r := range results {
+					fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
+					if r.Err != nil {
+						fmt.Println("[AI] 生成失败:", r.Err)
+					} else {
+						fmt.Println(r.Report)
+						fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+					}
+				}
+				fmt.Printf("[定时任务] 下一次将在 %s 后运行，Ctrl+C 可终止。\n", dur)
+				time.Sleep(dur)
+				if schedule == "daily" {
+					dur, _ = parseSchedule("daily") // 重新计算到明天0点的间隔
+				}
+			}
+			return
+		}
+		results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
+		for _, r := range results {
+			fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
+			if r.Err != nil {
+				fmt.Println("[AI] 生成失败:", r.Err)
+			} else {
+				fmt.Println(r.Report)
+				fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+			}
+		}
 		return
 	}
 	// 否则进入主菜单循环
