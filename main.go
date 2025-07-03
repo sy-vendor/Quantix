@@ -219,6 +219,21 @@ func mainMenu() {
 	}
 }
 
+func showAnalyzingAnimation(done chan struct{}) {
+	dots := 1
+	for {
+		select {
+		case <-done:
+			fmt.Print("\r                \r") // 清除动画行
+			return
+		default:
+			fmt.Printf("\r分析中%s", strings.Repeat(".", dots))
+			dots = dots%3 + 1
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
 func aiAnalysisInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 	apiKey := promptForAPIKey()
@@ -319,6 +334,8 @@ func aiAnalysisInteractiveMenu() {
 		Scope:      searchScope,
 		Lang:       lang,
 	}
+	done := make(chan struct{})
+	go showAnalyzingAnimation(done)
 	results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
 	for _, r := range results {
 		fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
@@ -357,6 +374,7 @@ func aiAnalysisInteractiveMenu() {
 			}
 		}
 	}
+	close(done)
 }
 
 func parseSchedule(s string) (time.Duration, error) {
@@ -454,6 +472,8 @@ func main() {
 			fmt.Printf("[定时任务] 启动，周期：%s\n", schedule)
 			for {
 				fmt.Printf("\n[%s] 批量分析开始\n", time.Now().Format("2006-01-02 15:04:05"))
+				done := make(chan struct{})
+				go showAnalyzingAnimation(done)
 				results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
 				for _, r := range results {
 					fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
@@ -495,9 +515,12 @@ func main() {
 				if schedule == "daily" {
 					dur, _ = parseSchedule("daily") // 重新计算到明天0点的间隔
 				}
+				close(done)
 			}
 			return
 		}
+		done := make(chan struct{})
+		go showAnalyzingAnimation(done)
 		results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
 		for _, r := range results {
 			fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
@@ -534,6 +557,7 @@ func main() {
 				}
 			}
 		}
+		close(done)
 		return
 	}
 	// 否则进入主菜单循环
