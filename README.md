@@ -174,9 +174,6 @@ $ go run main.go --apikey ... --model ... --stock ... --detail normal --webhook 
 - **Q: DeepSeek API Key 如何获取？**  
   A: 注册 [DeepSeek 官网](https://platform.deepseek.com/)，进入控制台获取。
 
-- **Q: PDF 导出失败怎么办？**  
-  A: 请先安装 [wkhtmltopdf](https://wkhtmltopdf.org/downloads.html)，并确保命令行可用。
-
 - **Q: 邮件推送失败？**  
   A: 检查 SMTP 配置、端口、用户名、密码是否正确，部分邮箱需开启"应用专用密码"。
 
