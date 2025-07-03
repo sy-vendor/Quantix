@@ -234,6 +234,17 @@ func showAnalyzingAnimation(done chan struct{}) {
 	}
 }
 
+func buildPromptWithDetail(params analysis.AnalysisParams, detail string) string {
+	basePrompt := analysis.BuildPrompt(params)
+	if detail == "extreme" {
+		return basePrompt + "\n请将每个分析维度细分到最小颗粒度，涵盖K线形态、均线系统、成交量、技术指标、支撑阻力、财务数据、盈利能力、估值、行业地位、管理层、分红、主力资金、北向资金、大宗交易、行业对比、情绪分析（新闻、公告、研报、论坛、社交媒体）、多周期预测（1天、1周、1月、3月），每项都要详细说明，所有结论都要有数据和理由支撑，输出结构化表格+要点+详细长文，适合专业投资者参考。"
+	}
+	if detail == "detailed" {
+		return basePrompt + "\n请对每个分析维度进行细致展开，涵盖技术面、基本面、资金面、行业对比、情绪分析的各个子项，给出多周期预测、操作建议、风险与机会，所有结论都要有理由和数据支撑。"
+	}
+	return basePrompt
+}
+
 func aiAnalysisInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 	apiKey := promptForAPIKey()
@@ -319,6 +330,12 @@ func aiAnalysisInteractiveMenu() {
 	fmt.Print("如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）: ")
 	webhook, _ := reader.ReadString('\n')
 	webhook = strings.TrimSpace(webhook)
+	fmt.Print("请选择分析详细程度（normal=普通，detailed=详细，extreme=极致详细，默认normal）: ")
+	detailInput, _ := reader.ReadString('\n')
+	detailInput = strings.TrimSpace(detailInput)
+	if detailInput == "" {
+		detailInput = "normal"
+	}
 	params := analysis.AnalysisParams{
 		APIKey:     apiKey,
 		Model:      model,
@@ -334,9 +351,18 @@ func aiAnalysisInteractiveMenu() {
 		Scope:      searchScope,
 		Lang:       lang,
 	}
+	prompt := buildPromptWithDetail(params, detailInput)
 	done := make(chan struct{})
 	go showAnalyzingAnimation(done)
-	results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
+	results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
+	for _, code := range params.StockCodes {
+		p := params
+		p.StockCodes = []string{code}
+		result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
+			return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
+		})
+		results = append(results, result)
+	}
 	for _, r := range results {
 		fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
 		if r.Err != nil {
@@ -426,6 +452,7 @@ func main() {
 	smtpUserFlag := flag.String("smtp-user", "", "SMTP用户名")
 	smtpPassFlag := flag.String("smtp-pass", "", "SMTP密码")
 	webhookFlag := flag.String("webhook", "", "IM webhook地址")
+	detailFlag := flag.String("detail", "normal", "分析详细程度 normal/detailed/extreme")
 	flag.Parse()
 
 	if *historyFlag {
@@ -474,7 +501,16 @@ func main() {
 				fmt.Printf("\n[%s] 批量分析开始\n", time.Now().Format("2006-01-02 15:04:05"))
 				done := make(chan struct{})
 				go showAnalyzingAnimation(done)
-				results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
+				prompt := buildPromptWithDetail(params, *detailFlag)
+				results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
+				for _, code := range params.StockCodes {
+					p := params
+					p.StockCodes = []string{code}
+					result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
+						return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
+					})
+					results = append(results, result)
+				}
 				for _, r := range results {
 					fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
 					if r.Err != nil {
@@ -521,7 +557,16 @@ func main() {
 		}
 		done := make(chan struct{})
 		go showAnalyzingAnimation(done)
-		results := analysis.AnalyzeBatch(params, analysis.GenerateAIReportWithConfigAndSearch)
+		prompt := buildPromptWithDetail(params, *detailFlag)
+		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
+		for _, code := range params.StockCodes {
+			p := params
+			p.StockCodes = []string{code}
+			result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
+				return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
+			})
+			results = append(results, result)
+		}
 		for _, r := range results {
 			fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
 			if r.Err != nil {
