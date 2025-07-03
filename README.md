@@ -7,6 +7,7 @@
 ## ✨ 项目亮点
 
 - **DeepSeek AI 智能分析**：支持"深度思考"与"联网搜索"两大模式
+- **智能详细程度**：normal/detailed/extreme 三种分析深度，自动增强AI分析质量
 - **批量分析**：支持多个股票代码（逗号分隔），主菜单和 CLI 参数均可批量分析
 - **定时任务**：支持 `--schedule` 参数，自动定时批量分析，支持分钟、小时、每日等周期
 - **一键导出**：支持导出 Markdown、HTML、PDF 格式报告，便于归档和分享
@@ -63,6 +64,7 @@
 
 | 功能             | 说明                                                                 |
 |------------------|----------------------------------------------------------------------|
+| **智能详细程度** | **normal**：标准分析，**detailed**：详细分析，**extreme**：极致详细分析 |
 | 批量分析         | 支持多个股票代码（逗号分隔），批量生成报告                            |
 | 定时任务         | --schedule 支持 10m、1h、daily 等周期自动分析                         |
 | 一键导出         | --export 支持 md、html、pdf 格式报告                                  |
@@ -80,6 +82,31 @@
 
 ---
 
+## 📊 详细程度模式详解
+
+### Normal 模式（默认）
+- 标准分析维度：技术面、基本面、资金面、行业对比、情绪分析
+- 多周期预测：1天、1周、1月、3月
+- 输出格式：要点 + 详细长文
+- 适合：日常投资决策参考
+
+### Detailed 模式
+- 扩展分析维度：各维度子项详细展开
+- 增强预测：多周期预测 + 操作建议 + 风险机会
+- 数据支撑：所有结论都有理由和数据支撑
+- 适合：深度研究和投资分析
+
+### Extreme 模式
+- **极致详细**：K线形态、均线系统、成交量、技术指标、支撑阻力
+- **财务深度**：财务数据、盈利能力、估值、行业地位、管理层、分红
+- **资金追踪**：主力资金、北向资金、大宗交易
+- **情绪分析**：新闻、公告、研报、论坛、社交媒体
+- **多周期预测**：1天、1周、1月、3月详细预测
+- **专业输出**：结构化表格 + 要点 + 详细长文
+- 适合：专业投资者和深度研究
+
+---
+
 ## 💡 主菜单与批量/定时/推送示例
 
 ```
@@ -90,6 +117,7 @@
 4. exit     - 退出程序
 请输入指令: new
 请输入股票代码（可批量，逗号分隔）: AAPL,MSFT,GOOG
+请选择分析详细程度（normal=普通，detailed=详细，extreme=极致详细，默认normal）: extreme
 请选择导出格式: md,html,pdf
 如需邮件推送请输入收件人邮箱: user@example.com
 SMTP服务器: smtp.example.com
@@ -99,14 +127,14 @@ SMTP密码: yourpass
 如需IM推送请输入Webhook地址: https://oapi.dingtalk.com/robot/send?access_token=xxx
 ...（依次生成、导出、推送每只股票的分析报告）...
 
-# CLI 批量分析并导出
-$ go run main.go --apikey ... --model ... --stock AAPL,MSFT,GOOG --export md,html,pdf ...
+# CLI 批量分析并导出（详细程度）
+$ go run main.go --apikey ... --model ... --stock AAPL,MSFT,GOOG --detail extreme --export md,html,pdf ...
 
-# CLI 定时任务+邮件推送
-$ go run main.go --apikey ... --model ... --stock ... --schedule 1h --export pdf --email user@example.com --smtp-server smtp.example.com --smtp-user user@example.com --smtp-pass yourpass ...
+# CLI 定时任务+邮件推送（详细分析）
+$ go run main.go --apikey ... --model ... --stock ... --detail detailed --schedule 1h --export pdf --email user@example.com --smtp-server smtp.example.com --smtp-user user@example.com --smtp-pass yourpass ...
 
-# CLI IM推送
-$ go run main.go --apikey ... --model ... --stock ... --webhook https://oapi.dingtalk.com/robot/send?access_token=xxx ...
+# CLI IM推送（标准分析）
+$ go run main.go --apikey ... --model ... --stock ... --detail normal --webhook https://oapi.dingtalk.com/robot/send?access_token=xxx ...
 ```
 
 ---
