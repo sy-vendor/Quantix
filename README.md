@@ -4,6 +4,36 @@
 
 ---
 
+## 🚀 3步极速体验
+
+1. 安装 Go 1.22+
+2. 获取 DeepSeek API Key（[点此注册](https://platform.deepseek.com/)）
+3. 运行：
+   ```bash
+   go run main.go
+   ```
+
+---
+
+## ⚙️ 常用命令行参数
+
+| 参数              | 说明                       | 示例/默认值                |
+|-------------------|----------------------------|----------------------------|
+| --apikey          | DeepSeek API Key           | sk-xxx                     |
+| --model           | DeepSeek模型名             | deepseek-chat              |
+| --stock           | 股票代码，逗号分隔         | AAPL,MSFT,GOOG             |
+| --start/--end     | 分析区间                   | 2024-01-01/2024-06-01      |
+| --export          | 导出格式                   | md,html,pdf                |
+| --email           | 邮件推送，逗号分隔         | user@example.com           |
+| --smtp-server     | SMTP服务器                 | smtp.example.com           |
+| --smtp-user/-pass | SMTP用户名/密码            | user@example.com/yourpass  |
+| --webhook         | 钉钉/企业微信Webhook       | https://...                |
+| --schedule        | 定时任务周期               | 1h、10m、daily             |
+| --detail          | 分析详细程度               | normal/detailed/extreme    |
+| --lang            | 分析语言                   | zh/en                      |
+
+---
+
 ## ✨ 项目亮点
 
 - **DeepSeek AI 智能分析**：支持"深度思考"与"联网搜索"两大模式
@@ -136,6 +166,19 @@ $ go run main.go --apikey ... --model ... --stock ... --detail detailed --schedu
 # CLI IM推送（标准分析）
 $ go run main.go --apikey ... --model ... --stock ... --detail normal --webhook https://oapi.dingtalk.com/robot/send?access_token=xxx ...
 ```
+
+---
+
+## ❓ 常见问题
+
+- **Q: DeepSeek API Key 如何获取？**  
+  A: 注册 [DeepSeek 官网](https://platform.deepseek.com/)，进入控制台获取。
+
+- **Q: PDF 导出失败怎么办？**  
+  A: 请先安装 [wkhtmltopdf](https://wkhtmltopdf.org/downloads.html)，并确保命令行可用。
+
+- **Q: 邮件推送失败？**  
+  A: 检查 SMTP 配置、端口、用户名、密码是否正确，部分邮箱需开启"应用专用密码"。
 
 ---
 
