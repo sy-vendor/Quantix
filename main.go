@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 var globalAPIKey string // 全局缓存API Key
@@ -75,21 +76,14 @@ func fetchDeepSeekModels(apiKey string, _ string) ([]string, error) {
 }
 
 func promptForModel(models []string) string {
-	fmt.Println("可用 DeepSeek 模型列表:")
-	for i, m := range models {
-		fmt.Printf("[%d] %s\n", i, m)
+	// 改为上下键选择
+	var selected string
+	prompt := &survey.Select{
+		Message: "请选择要使用的AI模型：",
+		Options: models,
 	}
-	fmt.Print("请输入模型编号: ")
-	reader := bufio.NewReader(os.Stdin)
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-	idx := 0
-	fmt.Sscanf(input, "%d", &idx)
-	if idx < 0 || idx >= len(models) {
-		fmt.Println("输入无效，默认选择第一个模型")
-		idx = 0
-	}
-	return models[idx]
+	survey.AskOne(prompt, &selected)
+	return selected
 }
 
 func promptForSearchMode() bool {
@@ -231,48 +225,52 @@ func showHistoryFile(filename string) {
 }
 
 func mainMenu() {
-	reader := bufio.NewReader(os.Stdin)
+	// 使用survey.Select替代手动输入
 	for {
-		fmt.Println("\n=== Quantix 智能股票分析系统 ===")
-		fmt.Println("1. new      - 新建AI分析（支持批量，股票代码用逗号分隔）")
-		fmt.Println("2. history  - 查看历史记录列表")
-		fmt.Println("3. show <文件名> - 查看指定历史分析")
-		fmt.Println("4. change-key - 更换DeepSeek API Key")
-		fmt.Println("5. exit     - 退出程序")
-		fmt.Println("提示：直接输入数字或命令名称即可")
-		fmt.Print("请输入指令: ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+		menuOptions := []string{
+			"新建AI分析（支持批量，股票代码用逗号分隔）",
+			"查看历史记录列表",
+			"查看指定历史分析",
+			"更换DeepSeek API Key",
+			"退出程序",
+		}
+		title := centerText("=== Quantix 智能股票分析系统 ===", 50)
+		msg := title + "\n单选：使用 ↑↓ 箭头键移动选择，回车键确认\n多选：使用 ↑↓ 箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认\n按 ? 键可查看详细操作说明\n\n请选择操作："
+		var selected string
+		prompt := &survey.Select{
+			Message: msg,
+			Options: menuOptions,
+		}
+		survey.AskOne(prompt, &selected)
 
-		switch input {
-		case "new", "1":
+		switch selected {
+		case menuOptions[0]:
 			aiAnalysisInteractiveMenu()
-		case "history", "2":
+		case menuOptions[1]:
 			listHistoryFiles()
-		case "show", "3":
-			fmt.Print("请输入文件名: ")
-			filename, _ := reader.ReadString('\n')
-			filename = strings.TrimSpace(filename)
+		case menuOptions[2]:
+			var filename string
+			_ = survey.AskOne(&survey.Input{Message: "请输入文件名:"}, &filename)
 			if filename != "" {
 				showHistoryFile(filename)
 			}
-		case "change-key", "4":
-			globalAPIKey = "" // 清空缓存，下次会重新输入
+		case menuOptions[3]:
+			globalAPIKey = ""
 			fmt.Println("API Key已重置，下次分析时将重新输入")
-		case "exit", "5":
+		case menuOptions[4]:
 			fmt.Println("再见！")
 			return
-		default:
-			if strings.HasPrefix(input, "show ") {
-				filename := strings.TrimSpace(strings.TrimPrefix(input, "show "))
-				if filename != "" {
-					showHistoryFile(filename)
-				}
-			} else {
-				fmt.Println("无效指令，请重新输入")
-			}
 		}
 	}
+}
+
+// 居中辅助函数
+func centerText(s string, width int) string {
+	if len([]rune(s)) >= width {
+		return s
+	}
+	pad := (width - len([]rune(s))) / 2
+	return strings.Repeat(" ", pad) + s
 }
 
 func showAnalyzingAnimation(done chan struct{}) {
@@ -301,18 +299,59 @@ func buildPromptWithDetail(params analysis.AnalysisParams, detail string) string
 	return basePrompt
 }
 
+// 打印对齐的分块
+func printStepBox(title string, lines ...string) {
+	width := 60
+	titleWidth := runewidth.StringWidth(title)
+	sideLen := (width - 2 - titleWidth) / 2
+	top := "┌" + strings.Repeat("─", sideLen) + title + strings.Repeat("─", width-2-titleWidth-sideLen) + "┐"
+	fmt.Println(top)
+	for _, l := range lines {
+		maxContent := width - 2
+		lWidth := runewidth.StringWidth(l)
+		if lWidth > maxContent {
+			l = runewidth.Truncate(l, maxContent-1, "…")
+			lWidth = runewidth.StringWidth(l)
+		}
+		pad := maxContent - lWidth
+		if pad < 0 {
+			pad = 0
+		}
+		fmt.Printf("│%s%s│\n", l, strings.Repeat(" ", pad))
+	}
+	fmt.Println("└" + strings.Repeat("─", width-2) + "┘")
+}
+
 func aiAnalysisInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 
-	// 添加操作说明
-	fmt.Println("\n=== AI 智能分析配置 ===")
+	fmt.Println("\n================= AI 智能分析配置 =================")
 	fmt.Println("单选：使用 ↑↓ 箭头键移动选择，回车键确认")
 	fmt.Println("多选：使用 ↑↓ 箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认")
 	fmt.Println("按 ? 键可查看详细操作说明")
-	fmt.Println()
+	fmt.Println("==================================================\n")
 
+	// Step 0: API Key
+	printStepBox("Step 0: API Key",
+		"请输入 DeepSeek API Key",
+		"说明：用于访问 DeepSeek LLM 服务",
+	)
 	apiKey := promptForAPIKey()
-	fmt.Println("正在获取可用 DeepSeek 模型...")
+	printStepBox("Step 0: API Key", fmt.Sprintf("[当前API Key]: %s...", func() string {
+		if len(apiKey) > 8 {
+			return apiKey[:8]
+		} else {
+			return apiKey
+		}
+	}()))
+
+	// Step 1: 选择模型
+	printStepBox("Step 1: AI Model",
+		"选择要使用的AI模型",
+		"说明：不同模型分析能力和速度略有差异",
+		"Default: 自动推荐 DeepSeek 模型",
+		"正在获取可用 DeepSeek 模型...",
+	)
 	models, err := fetchDeepSeekModels(apiKey, "")
 	deepseekModels := make([]string, 0)
 	for _, m := range models {
@@ -320,32 +359,76 @@ func aiAnalysisInteractiveMenu() {
 			deepseekModels = append(deepseekModels, m)
 		}
 	}
-	model := ""
+	var model string
 	if err == nil && len(deepseekModels) > 0 {
-		fmt.Println("请选择要使用的AI模型：")
 		model = promptForModel(deepseekModels)
 	} else {
 		fmt.Println("未找到可用的 DeepSeek 模型，请手动输入模型名（如 deepseek/deepseek-r1:free）")
 		model, _ = reader.ReadString('\n')
 		model = strings.TrimSpace(model)
 	}
-	fmt.Print("请输入股票代码（可批量，逗号分隔）: ")
+	printStepBox("Step 1: AI Model", fmt.Sprintf("[当前选择]: %s", model))
+
+	// Step 2: 股票代码
+	printStepBox("Step 2: Ticker Symbol",
+		"Enter the ticker symbol(s) to analyze",
+		"说明：可批量，逗号分隔。如 600036,000001",
+		"Default: 600036",
+	)
 	stockInput := interactiveInput("请输入股票代码（可批量，逗号分隔）:", "")
 	stockCodes := splitAndTrim(stockInput)
 	if len(stockCodes) == 0 || stockCodes[0] == "" {
 		fmt.Println("股票代码不能为空！")
 		return
 	}
+	printStepBox("Step 2: Ticker Symbol", fmt.Sprintf("[当前选择]: %s", strings.Join(stockCodes, ", ")))
+
+	// Step 3: 日期
 	today := time.Now()
 	defaultEnd := today.Format("2006-01-02")
 	defaultStart := today.AddDate(0, 0, -30).Format("2006-01-02")
-	fmt.Printf("请输入开始日期(YYYY-MM-DD, 默认%s): ", defaultStart)
+	printStepBox("Step 3: Analysis Date",
+		"Enter the analysis date range (YYYY-MM-DD)",
+		fmt.Sprintf("Default: %s ~ %s", defaultStart, defaultEnd),
+	)
 	start := interactiveInput(fmt.Sprintf("请输入开始日期(YYYY-MM-DD, 默认%s):", defaultStart), defaultStart)
-	fmt.Printf("请输入结束日期(YYYY-MM-DD, 默认%s): ", defaultEnd)
 	end := interactiveInput(fmt.Sprintf("请输入结束日期(YYYY-MM-DD, 默认%s):", defaultEnd), defaultEnd)
+	printStepBox("Step 3: Analysis Date", fmt.Sprintf("[当前选择]: %s ~ %s", start, end))
+
+	// Step 4: 分析模式
+	printStepBox("Step 4: Analysis Mode",
+		"Select your analysis mode",
+		"说明：深度思考仅用模型推理，联网搜索结合互联网信息",
+	)
 	searchMode := promptForSearchMode()
+	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", func() string {
+		if searchMode {
+			return "联网搜索"
+		} else {
+			return "深度思考"
+		}
+	}()))
+
+	// Step 5: 预测参数
+	printStepBox("Step 5: Prediction Options",
+		"选择预测周期、分析维度、输出格式等",
+		"说明：可多选，回车确认",
+	)
 	periods, dims, searchScope, outputFormat, needConfidence, riskPref := promptForPredictionOptions()
-	// 语言选择
+	printStepBox("Step 5: Prediction Options",
+		fmt.Sprintf("[周期]: %s", strings.Join(periods, ", ")),
+		fmt.Sprintf("[维度]: %s", strings.Join(dims, ", ")),
+		fmt.Sprintf("[输出]: %s", outputFormat),
+		fmt.Sprintf("[置信度]: %v", needConfidence),
+		fmt.Sprintf("[风险偏好]: %s", riskPref),
+		fmt.Sprintf("[联网范围]: %s", strings.Join(searchScope, ", ")),
+	)
+
+	// Step 6: 语言选择
+	printStepBox("Step 6: Language",
+		"Select analysis language",
+		"说明：支持中文和英文",
+	)
 	langOptions := []string{"中文", "英文"}
 	defaultLang := []string{"中文"}
 	langResult := interactiveSelectList("请选择分析语言：", langOptions, defaultLang)
@@ -355,14 +438,19 @@ func aiAnalysisInteractiveMenu() {
 	} else {
 		lang = "zh"
 	}
+	printStepBox("Step 6: Language", fmt.Sprintf("[当前选择]: %s", lang))
 
-	// 导出格式选择
+	// Step 7: 导出格式
+	printStepBox("Step 7: Export Format",
+		"Select export format(s)",
+		"说明：可多选，支持 Markdown/HTML",
+	)
 	exportOptions := []string{"Markdown", "HTML"}
 	defaultExport := []string{"Markdown"}
 	exportResult := interactiveSelectList("请选择导出格式（可多选）：", exportOptions, defaultExport)
 	exportFormats := make([]string, 0, len(exportResult))
-	for _, fmt := range exportResult {
-		switch fmt {
+	for _, fmtx := range exportResult {
+		switch fmtx {
 		case "Markdown":
 			exportFormats = append(exportFormats, "md")
 		case "HTML":
@@ -372,12 +460,18 @@ func aiAnalysisInteractiveMenu() {
 	if len(exportFormats) == 0 {
 		exportFormats = []string{"md"}
 	}
-	fmt.Print("如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）: ")
+	printStepBox("Step 7: Export Format", fmt.Sprintf("[当前选择]: %s", strings.Join(exportFormats, ", ")))
+
+	// Step 8: 邮件推送
+	printStepBox("Step 8: Email Push",
+		"如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）",
+	)
 	emailInput := interactiveInput("如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）:", "")
 	emails := splitAndTrim(emailInput)
 	var smtpServer, smtpUser, smtpPass string
 	var smtpPort int
 	if len(emails) > 0 && emails[0] != "" {
+		fmt.Println("SMTP服务器、端口、用户名、密码依次输入：")
 		fmt.Print("SMTP服务器: ")
 		smtpServer, _ = reader.ReadString('\n')
 		smtpServer = strings.TrimSpace(smtpServer)
@@ -395,12 +489,22 @@ func aiAnalysisInteractiveMenu() {
 		smtpPass, _ = reader.ReadString('\n')
 		smtpPass = strings.TrimSpace(smtpPass)
 	}
-	fmt.Print("如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）: ")
+	printStepBox("Step 8: Email Push", fmt.Sprintf("[当前邮箱]: %s", strings.Join(emails, ", ")))
+
+	// Step 9: IM 推送
+	printStepBox("Step 9: IM Push",
+		"如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）",
+	)
 	webhook := interactiveInput("如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）:", "")
-	// 分析详细程度选择
+	printStepBox("Step 9: IM Push", fmt.Sprintf("[当前Webhook]: %s", webhook))
+
+	// Step 10: 分析详细程度
+	printStepBox("Step 10: Research Depth",
+		"Select your research depth level",
+		"说明：影响分析细致程度和报告内容",
+	)
 	detailOptions := []string{"普通分析 - 基础技术指标和简要分析", "详细分析 - 多维度深度分析，包含更多指标", "极致分析 - 最全面的分析，包含所有可用指标和深度洞察"}
 	defaultDetail := []string{"普通分析 - 基础技术指标和简要分析"}
-
 	detailResult := interactiveSelectList("请选择分析详细程度：", detailOptions, defaultDetail)
 	var detailInput string
 	if len(detailResult) > 0 {
@@ -417,6 +521,8 @@ func aiAnalysisInteractiveMenu() {
 	} else {
 		detailInput = "normal"
 	}
+	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailResult[0]))
+
 	params := analysis.AnalysisParams{
 		APIKey:     apiKey,
 		Model:      model,
@@ -426,7 +532,7 @@ func aiAnalysisInteractiveMenu() {
 		SearchMode: searchMode,
 		Periods:    periods,
 		Dims:       dims,
-		Output:     []string{outputFormat},
+		Output:     exportFormats,
 		Confidence: needConfidence,
 		Risk:       riskPref,
 		Scope:      searchScope,
@@ -463,8 +569,6 @@ func aiAnalysisInteractiveMenu() {
 		} else {
 			fmt.Println(r.Report)
 			fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
-
-			// 导出报告功能已移除
 
 			// 邮件推送
 			if len(emails) > 0 && emails[0] != "" && smtpServer != "" && smtpUser != "" && smtpPass != "" {
@@ -526,7 +630,7 @@ func main() {
 {{"\n"}}
 {{- end}}
 {{- if .ShowHelp }}{{color "cyan"}}{{ .Help }}{{color "reset"}}{{"\n"}}{{end}}
-{{- color "cyan"}}?{{color "reset"}} {{ .Message }}{{ .FilterMessage }}
+{{- color "cyan"}}{{ .Message }}{{ .FilterMessage }}
 {{- if .ShowAnswer}}{{color "cyan"}} {{.Answer}}{{color "reset"}}{{"\n"}}
 {{- else }}
   {{- "  "}}{{- color "cyan"}}[使用箭头键移动，空格键选择，右箭头键全选，左箭头键全不选，输入过滤，? 查看帮助]{{color "reset"}}
@@ -538,14 +642,13 @@ func main() {
 
 	survey.SelectQuestionTemplate = `
 {{- if .ShowHelp }}{{color "cyan"}}{{ .Help }}{{color "reset"}}{{"\n"}}{{end}}
-{{- color "cyan"}}?{{color "reset"}} {{ .Message }}{{ .FilterMessage }}
+{{- color "cyan"}}{{ .Message }}{{ .FilterMessage }}
 {{- if .ShowAnswer}}{{color "cyan"}} {{.Answer}}{{color "reset"}}{{"\n"}}
 {{- else }}
   {{- "  "}}{{- color "cyan"}}[使用箭头键移动，回车键确认，? 查看帮助]{{color "reset"}}
   {{- "\n"}}
   {{- range $ix, $option := .PageEntries}}
-    {{- if eq $.SelectedIndex $ix }}{{color "cyan"}}> {{else}}  {{end}}
-    {{- " "}}{{- $option.Value}}{{ if ne ($.GetDescription $option) "" }} - {{color "cyan"}}{{ $.GetDescription $option }}{{color "reset"}}{{end}}
+    {{- if eq $.SelectedIndex $ix }}{{color "cyan"}}> {{ $option.Value }}{{color "reset"}}{{else}}  {{ $option.Value }}{{end}}
     {{- "\n"}}
   {{- end}}
 {{- end}}`

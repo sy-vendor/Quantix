@@ -1,18 +1,26 @@
 package analysis
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"math"
-	"net/http"
+	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
+
+	"encoding/json"
+	"net/http"
+	"strconv"
+
+	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
+	"github.com/russross/blackfriday/v2"
 )
+
+// 类型定义补充
+
+// AnalysisParams 用于传递分析参数
+// 可根据main.go和ai.go的实际用法调整字段
+// StockData、TechnicalIndicator用于chart.go
 
 type AnalysisParams struct {
 	APIKey     string
@@ -28,7 +36,7 @@ type AnalysisParams struct {
 	Risk       string
 	Scope      []string
 	Lang       string
-	Prompt     string
+	Prompt     string // 可选，手动传递prompt
 }
 
 type AnalysisResult struct {
@@ -41,309 +49,222 @@ type AnalysisResult struct {
 type StockData struct {
 	Date   time.Time
 	Open   float64
-	High   float64
-	Low    float64
 	Close  float64
-	Volume int64
+	Low    float64
+	High   float64
+	Volume float64
 }
 
 type TechnicalIndicator struct {
-	Date time.Time
 	MA5  float64
 	MA10 float64
 	MA20 float64
 	MA60 float64
-	RSI  float64
-	MACD float64
 }
 
-// 单只股票AI分析（调用原有AI分析函数）
-func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, string, string, bool) (string, error)) AnalysisResult {
-	prompt := params.Prompt
-	if prompt == "" {
-		prompt = BuildPrompt(params)
-	}
-	report, err := genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode)
-	if err != nil {
-		return AnalysisResult{StockCode: params.StockCodes[0], Err: err}
-	}
-	fname := fmt.Sprintf("%s-%s-%s.json", params.StockCodes[0], params.End, time.Now().Format("150405"))
-	fpath := filepath.Join("history", fname)
-	hist := map[string]interface{}{
-		"time":  time.Now().Format("2006-01-02 15:04:05"),
-		"stock": params.StockCodes[0],
-		"start": params.Start,
-		"end":   params.End,
-		"model": params.Model,
-		"mode": func() string {
-			if params.SearchMode {
-				return "search"
-			} else {
-				return "reason"
-			}
-		}(),
-		"periods":    params.Periods,
-		"dims":       params.Dims,
-		"output":     params.Output,
-		"confidence": params.Confidence,
-		"risk":       params.Risk,
-		"scope":      params.Scope,
-		"lang":       params.Lang,
-		"prompt":     prompt,
-		"report":     report,
-	}
-	b, _ := json.MarshalIndent(hist, "", "  ")
-	_ = ioutil.WriteFile(fpath, b, 0644)
-	return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: fname}
-}
-
-// 多只股票批量分析
-func AnalyzeBatch(params AnalysisParams, genFunc func(string, string, string, string, string, bool) (string, error)) []AnalysisResult {
-	results := make([]AnalysisResult, 0, len(params.StockCodes))
-	for _, code := range params.StockCodes {
-		p := params
-		p.StockCodes = []string{code}
-		results = append(results, AnalyzeOne(p, genFunc))
-	}
-	return results
-}
-
-// 构建prompt（支持多语言）
-func BuildPrompt(params AnalysisParams) string {
-	if params.Lang == "en" {
-		return fmt.Sprintf(
-			"Please provide a detailed analysis of stock %s from %s to %s, including:\n"+
-				"1. Analysis dimensions: %s\n"+
-				"2. Prediction periods: %s\n"+
-				"3. Output format: %s\n"+
-				"4. Web search scope: %s\n"+
-				"5. Risk/opportunity preference: %s\n"+
-				"6. %s\n"+
-				"Please output structured, sectioned, key-point or table content as required.",
-			params.StockCodes[0], params.Start, params.End,
-			strings.Join(params.Dims, ", "),
-			strings.Join(params.Periods, ", "),
-			strings.Join(params.Output, ", "),
-			strings.Join(params.Scope, ", "),
-			params.Risk,
-			func() string {
-				if params.Confidence {
-					return "For each prediction, provide a confidence level or probability range, and briefly explain the rationale."
-				}
-				return ""
-			}(),
-		)
-	}
-	return fmt.Sprintf(
-		"请对股票代码 %s 在 %s 到 %s 期间的行情进行详细分析，内容包括：\n"+
-			"1. 分析维度：%s\n"+
-			"2. 预测周期：%s\n"+
-			"3. 输出格式：%s\n"+
-			"4. 联网搜索内容范围：%s\n"+
-			"5. 风险/机会偏好：%s\n"+
-			"6. %s\n"+
-			"请结合以上要求，输出结构化、分段、要点或表格内容。",
-		params.StockCodes[0], params.Start, params.End,
-		strings.Join(params.Dims, ", "),
-		strings.Join(params.Periods, ", "),
-		strings.Join(params.Output, ", "),
-		strings.Join(params.Scope, ", "),
-		params.Risk,
-		func() string {
-			if params.Confidence {
-				return "请对每个预测结论给出置信度或概率区间，并简要说明理由。"
-			}
-			return ""
-		}(),
-	)
-}
-
-// FetchStockHistory 通过 DeepSeek 联网搜索获取股票历史数据
+// 函数声明补充
 func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []TechnicalIndicator, error) {
-	// 构建搜索查询
-	query := fmt.Sprintf("请搜索股票 %s 从 %s 到 %s 的历史行情数据，包括开盘价、最高价、最低价、收盘价、成交量，以及MA5、MA10、MA20、MA60、RSI、MACD等技术指标。请以JSON格式返回，格式如下：{\"data\":[{\"date\":\"2024-01-01\",\"open\":100.0,\"high\":105.0,\"low\":98.0,\"close\":102.0,\"volume\":1000000}],\"indicators\":[{\"date\":\"2024-01-01\",\"ma5\":101.0,\"ma10\":100.5,\"ma20\":99.8,\"ma60\":98.2,\"rsi\":65.5,\"macd\":0.5}]}", stockCode, start, end)
-
-	// 使用传入的API Key
-	if apiKey == "" {
-		return nil, nil, fmt.Errorf("DeepSeek API Key 未设置")
+	// 腾讯API symbol格式：sh600036、sz000001
+	symbol := stockCode
+	if len(stockCode) == 6 && stockCode[0] == '6' {
+		symbol = "sh" + stockCode
+	} else if len(stockCode) == 6 && (stockCode[0] == '0' || stockCode[0] == '3') {
+		symbol = "sz" + stockCode
 	}
-
-	// 构建请求
-	requestBody := map[string]interface{}{
-		"model": "deepseek-chat",
-		"messages": []map[string]string{
-			{"role": "user", "content": query},
-		},
-		"search": true, // 启用联网搜索
-	}
-
-	body, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// 发送请求
+	url := "https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=" + symbol + ",day,,,320"
 	client := &http.Client{}
-	req, err := http.NewRequest("POST", "https://api.deepseek.com/v1/chat/completions", bytes.NewBuffer(body))
-	if err != nil {
-		return nil, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-
-	respBody, err := ioutil.ReadAll(resp.Body)
+	body, _ := ioutil.ReadAll(resp.Body)
+	var data struct {
+		Data map[string]struct {
+			Day [][]interface{} `json:"day"`
+		} `json:"data"`
+	}
+	err = json.Unmarshal(body, &data)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	var dsResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-
-	if err := json.Unmarshal(respBody, &dsResp); err != nil {
-		return nil, nil, err
-	}
-
-	if len(dsResp.Choices) == 0 {
-		return nil, nil, fmt.Errorf("DeepSeek API 无返回内容")
-	}
-
-	content := dsResp.Choices[0].Message.Content
-
-	// 解析返回的JSON数据
-	return parseStockDataFromContent(content)
-}
-
-// parseStockDataFromContent 从AI返回内容中解析股票数据
-func parseStockDataFromContent(content string) ([]StockData, []TechnicalIndicator, error) {
-	// 尝试提取JSON数据
-	jsonRegex := regexp.MustCompile(`\{.*"data".*"indicators".*\}`)
-	jsonMatch := jsonRegex.FindString(content)
-	if jsonMatch == "" {
-		// 如果没有找到完整JSON，尝试分别提取
-		return parseStockDataFromText(content)
-	}
-
-	var result struct {
-		Data []struct {
-			Date   string  `json:"date"`
-			Open   float64 `json:"open"`
-			High   float64 `json:"high"`
-			Low    float64 `json:"low"`
-			Close  float64 `json:"close"`
-			Volume int64   `json:"volume"`
-		} `json:"data"`
-		Indicators []struct {
-			Date time.Time `json:"date"`
-			MA5  float64   `json:"ma5"`
-			MA10 float64   `json:"ma10"`
-			MA20 float64   `json:"ma20"`
-			MA60 float64   `json:"ma60"`
-			RSI  float64   `json:"rsi"`
-			MACD float64   `json:"macd"`
-		} `json:"indicators"`
-	}
-
-	if err := json.Unmarshal([]byte(jsonMatch), &result); err != nil {
-		return parseStockDataFromText(content)
-	}
-
-	// 转换数据
 	var stockData []StockData
-	for _, d := range result.Data {
-		date, _ := time.Parse("2006-01-02", d.Date)
-		stockData = append(stockData, StockData{
-			Date:   date,
-			Open:   d.Open,
-			High:   d.High,
-			Low:    d.Low,
-			Close:  d.Close,
-			Volume: d.Volume,
-		})
+	var closes []float64
+	for _, v := range data.Data {
+		for _, item := range v.Day {
+			// item: [日期,开,收,高,低,成交量,...]
+			if len(item) < 6 {
+				continue
+			}
+			dateStr := item[0].(string)
+			dt, _ := time.Parse("2006-01-02", dateStr)
+			open, _ := strconv.ParseFloat(item[1].(string), 64)
+			close, _ := strconv.ParseFloat(item[2].(string), 64)
+			high, _ := strconv.ParseFloat(item[3].(string), 64)
+			low, _ := strconv.ParseFloat(item[4].(string), 64)
+			vol, _ := strconv.ParseFloat(item[5].(string), 64)
+			stockData = append(stockData, StockData{
+				Date:   dt,
+				Open:   open,
+				Close:  close,
+				High:   high,
+				Low:    low,
+				Volume: vol,
+			})
+			closes = append(closes, close)
+		}
 	}
-
+	// 本地计算MA5/10/20/60
+	ma := func(arr []float64, n int, idx int) float64 {
+		if idx+1 < n {
+			return 0
+		}
+		sum := 0.0
+		for i := idx + 1 - n; i <= idx; i++ {
+			sum += arr[i]
+		}
+		return sum / float64(n)
+	}
 	var indicators []TechnicalIndicator
-	for _, ind := range result.Indicators {
+	for i := range closes {
 		indicators = append(indicators, TechnicalIndicator{
-			Date: ind.Date,
-			MA5:  ind.MA5,
-			MA10: ind.MA10,
-			MA20: ind.MA20,
-			MA60: ind.MA60,
-			RSI:  ind.RSI,
-			MACD: ind.MACD,
+			MA5:  ma(closes, 5, i),
+			MA10: ma(closes, 10, i),
+			MA20: ma(closes, 20, i),
+			MA60: ma(closes, 60, i),
 		})
 	}
-
 	return stockData, indicators, nil
 }
 
-// parseStockDataFromText 从文本中解析股票数据（备用方案）
-func parseStockDataFromText(content string) ([]StockData, []TechnicalIndicator, error) {
-	var stockData []StockData
-	var indicators []TechnicalIndicator
+func BuildPrompt(params AnalysisParams) string {
+	langMap := map[string]string{"zh": "中文", "en": "英文"}
+	lang := langMap[params.Lang]
+	if lang == "" {
+		lang = params.Lang
+	}
+	prompt := fmt.Sprintf(
+		"请用%s分析股票【%s】在区间【%s ~ %s】的走势。\n",
+		lang,
+		params.StockCodes[0],
+		params.Start, params.End,
+	)
+	if len(params.Periods) > 0 {
+		prompt += fmt.Sprintf("分析周期包括：%s。\n", strings.Join(params.Periods, "、"))
+	}
+	if len(params.Dims) > 0 {
+		prompt += fmt.Sprintf("分析维度包括：%s。\n", strings.Join(params.Dims, "、"))
+	}
+	prompt += "请结合上方K线图、均线图、成交量图，对当前股票的走势、支撑阻力、均线形态、量价关系等进行详细分析，给出趋势判断、操作建议和风险提示。分析内容需包括：\n"
+	prompt += "1. K线形态与趋势解读\n"
+	prompt += "2. 均线系统排列与金叉死叉分析\n"
+	prompt += "3. 成交量变化与量价关系\n"
+	prompt += "4. 支撑位与阻力位判断\n"
+	prompt += "5. 操作建议（如持有/加仓/减仓/观望等）\n"
+	prompt += "6. 风险提示与注意事项\n"
+	prompt += "请用专业、客观、结构化的语言输出，适合投资者决策参考。"
+	return prompt
+}
 
-	// 简单的文本解析逻辑
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		// 尝试解析日期和价格数据
-		if strings.Contains(line, "202") && (strings.Contains(line, "开盘") || strings.Contains(line, "收盘")) {
-			// 示例：2024-01-01 开盘:100.0 最高:105.0 最低:98.0 收盘:102.0 成交量:1000000
-			dateRegex := regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
-			priceRegex := regexp.MustCompile(`开盘:(\d+\.?\d*)`)
-			highRegex := regexp.MustCompile(`最高:(\d+\.?\d*)`)
-			lowRegex := regexp.MustCompile(`最低:(\d+\.?\d*)`)
-			closeRegex := regexp.MustCompile(`收盘:(\d+\.?\d*)`)
-			volumeRegex := regexp.MustCompile(`成交量:(\d+)`)
+func markdownToHTML(md string) string {
+	html := blackfriday.Run([]byte(md))
+	return string(html)
+}
 
-			dateMatch := dateRegex.FindStringSubmatch(line)
-			if len(dateMatch) > 1 {
-				date, _ := time.Parse("2006-01-02", dateMatch[1])
+func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, string, string, bool) (string, error)) AnalysisResult {
+	prompt := params.Prompt
+	if prompt == "" {
+		prompt = BuildPrompt(params)
+	}
 
-				open, _ := strconv.ParseFloat(priceRegex.FindStringSubmatch(line)[1], 64)
-				high, _ := strconv.ParseFloat(highRegex.FindStringSubmatch(line)[1], 64)
-				low, _ := strconv.ParseFloat(lowRegex.FindStringSubmatch(line)[1], 64)
-				close, _ := strconv.ParseFloat(closeRegex.FindStringSubmatch(line)[1], 64)
-				volume, _ := strconv.ParseInt(volumeRegex.FindStringSubmatch(line)[1], 10, 64)
+	// 生成图表
+	stockData, indicators, _ := FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
+	chartPaths, _ := GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
 
-				stockData = append(stockData, StockData{
-					Date:   date,
-					Open:   open,
-					High:   high,
-					Low:    low,
-					Close:  close,
-					Volume: volume,
-				})
+	report, err := genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode)
+	if err != nil {
+		return AnalysisResult{StockCode: params.StockCodes[0], Err: err}
+	}
+
+	// 在报告前插入图表引用
+	var chartRefs string
+	for _, p := range chartPaths {
+		chartRefs += fmt.Sprintf("![图表](%s)\n", p)
+	}
+	report = chartRefs + report
+
+	// 自动修复：确保history目录存在
+	os.MkdirAll("history", 0755)
+
+	// 支持多格式导出
+	exports := []string{"md"} // 默认md
+	if len(params.Output) > 0 {
+		exports = params.Output
+	}
+	var savedFile string
+	var writeErr error
+	for _, ext := range exports {
+		var fname string
+		fbase := fmt.Sprintf("%s-%s-%s", params.StockCodes[0], params.End, time.Now().Format("150405"))
+		fpath := ""
+		if ext == "md" {
+			fname = fbase + ".md"
+			fpath = filepath.Join("history", fname)
+			err := ioutil.WriteFile(fpath, []byte(report), 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[错误] 写入Markdown文件失败: %s\n", err)
+				writeErr = err
+			} else {
+				fmt.Println("[调试] 已写入Markdown文件：", fpath)
+				savedFile = fname
+			}
+		} else if ext == "html" {
+			fname = fbase + ".html"
+			fpath = filepath.Join("history", fname)
+			html := "<meta charset=\"utf-8\">\n" + markdownToHTML(report)
+			err := ioutil.WriteFile(fpath, []byte(html), 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[错误] 写入HTML文件失败: %s\n", err)
+				writeErr = err
+			} else {
+				fmt.Println("[调试] 已写入HTML文件：", fpath)
+				savedFile = fname
+			}
+		} else if ext == "pdf" {
+			fname = fbase + ".pdf"
+			fpath = filepath.Join("history", fname)
+			html := "<meta charset=\"utf-8\">\n" + markdownToHTML(report)
+			pdfg, _ := wkhtmltopdf.NewPDFGenerator()
+			pdfg.AddPage(wkhtmltopdf.NewPageReader(strings.NewReader(html)))
+			pdfg.Dpi.Set(300)
+			pdfg.Orientation.Set(wkhtmltopdf.OrientationPortrait)
+			pdfg.PageSize.Set(wkhtmltopdf.PageSizeA4)
+			pdfg.NoCollate.Set(false)
+			pdfg.Grayscale.Set(false)
+			pdfg.MarginLeft.Set(10)
+			pdfg.MarginRight.Set(10)
+			pdfg.MarginTop.Set(10)
+			pdfg.MarginBottom.Set(10)
+			err := pdfg.Create()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[错误] 生成PDF失败: %s\n", err)
+				writeErr = err
+				continue
+			}
+			err = pdfg.WriteFile(fpath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[错误] 写入PDF文件失败: %s\n", err)
+				writeErr = err
+			} else {
+				fmt.Println("[调试] 已写入PDF文件：", fpath)
+				savedFile = fname
 			}
 		}
 	}
-
-	// 如果没有解析到数据，生成示例数据
-	if len(stockData) == 0 {
-		now := time.Now()
-		for i := 30; i >= 0; i-- {
-			date := now.AddDate(0, 0, -i)
-			basePrice := 100.0 + float64(i)*0.1
-			stockData = append(stockData, StockData{
-				Date:   date,
-				Open:   basePrice + math.Sin(float64(i)*0.1)*2,
-				High:   basePrice + math.Sin(float64(i)*0.1)*2 + 3,
-				Low:    basePrice + math.Sin(float64(i)*0.1)*2 - 2,
-				Close:  basePrice + math.Sin(float64(i)*0.1)*2 + 1,
-				Volume: int64(1000000 + i*10000),
-			})
-		}
+	if writeErr != nil {
+		return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: savedFile, Err: writeErr}
 	}
-
-	return stockData, indicators, nil
+	return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: savedFile}
 }
