@@ -230,6 +230,7 @@ func mainMenu() {
 	for {
 		menuOptions := []string{
 			"新建AI分析（支持批量，股票代码用逗号分隔）",
+			"定时任务（自动定时分析/推送）",
 			"查看历史记录列表",
 			"查看指定历史分析",
 			"更换DeepSeek API Key",
@@ -248,17 +249,19 @@ func mainMenu() {
 		case menuOptions[0]:
 			aiAnalysisInteractiveMenu()
 		case menuOptions[1]:
-			listHistoryFiles()
+			aiScheduleInteractiveMenu()
 		case menuOptions[2]:
+			listHistoryFiles()
+		case menuOptions[3]:
 			var filename string
 			_ = survey.AskOne(&survey.Input{Message: "请输入文件名:"}, &filename)
 			if filename != "" {
 				showHistoryFile(filename)
 			}
-		case menuOptions[3]:
+		case menuOptions[4]:
 			globalAPIKey = ""
 			fmt.Println("API Key已重置，下次分析时将重新输入")
-		case menuOptions[4]:
+		case menuOptions[5]:
 			fmt.Println("再见！")
 			return
 		}
@@ -481,7 +484,6 @@ func aiAnalysisInteractiveMenu() {
 	emailInput := interactiveInput("如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）:", "")
 	emails := splitAndTrim(emailInput)
 	var smtpServer, smtpUser, smtpPass string
-	var smtpPort int
 	if len(emails) > 0 && emails[0] != "" {
 		fmt.Println("SMTP服务器、端口、用户名、密码依次输入：")
 		fmt.Print("SMTP服务器: ")
@@ -490,9 +492,7 @@ func aiAnalysisInteractiveMenu() {
 		fmt.Print("SMTP端口(默认465): ")
 		portInput := interactiveInput("SMTP端口(默认465):", "")
 		if portInput == "" {
-			smtpPort = 465
-		} else {
-			smtpPort, _ = strconv.Atoi(portInput)
+			// smtpPort = 465
 		}
 		fmt.Print("SMTP用户名: ")
 		smtpUser, _ = reader.ReadString('\n')
@@ -625,7 +625,7 @@ func aiAnalysisInteractiveMenu() {
 						attachs = append(attachs, "history/"+r.SavedFile[:len(r.SavedFile)-5]+"."+fmtx)
 					}
 				}
-				err := analysis.SendEmail(smtpServer, smtpPort, smtpUser, smtpPass, emails, "Quantix分析报告", r.Report, attachs)
+				err := analysis.SendEmail(smtpServer, 465, smtpUser, smtpPass, emails, "Quantix分析报告", r.Report, attachs)
 				if err != nil {
 					fmt.Println("[邮件发送失败]", err)
 				} else {
@@ -668,6 +668,296 @@ func parseSchedule(s string) (time.Duration, error) {
 		return time.Duration(m) * time.Minute, nil
 	}
 	return 0, fmt.Errorf("不支持的定时格式，仅支持 10m、1h、daily 等")
+}
+
+// 定时任务交互式菜单
+func aiScheduleInteractiveMenu() {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("\n================= 定时任务配置 =================")
+	fmt.Println("本功能支持自动定时分析、推送，无需人工值守。Ctrl+C 可随时终止。\n")
+
+	// 复用 aiAnalysisInteractiveMenu 的参数交互
+	// Step 0: API Key
+	printStepBox("Step 0: API Key",
+		"请输入 DeepSeek API Key",
+		"说明：用于访问 DeepSeek LLM 服务",
+	)
+	apiKey := promptForAPIKey()
+	printStepBox("Step 0: API Key", fmt.Sprintf("[当前API Key]: %s...", func() string {
+		if len(apiKey) > 8 {
+			return apiKey[:8]
+		} else {
+			return apiKey
+		}
+	}()))
+
+	// Step 1: 选择模型
+	printStepBox("Step 1: AI Model",
+		"选择要使用的AI模型",
+		"说明：不同模型分析能力和速度略有差异",
+		"Default: 自动推荐 DeepSeek 模型",
+		"正在获取可用 DeepSeek 模型...",
+	)
+	models, err := fetchDeepSeekModels(apiKey, "")
+	deepseekModels := make([]string, 0)
+	for _, m := range models {
+		if strings.Contains(m, "deepseek") {
+			deepseekModels = append(deepseekModels, m)
+		}
+	}
+	var model string
+	if err == nil && len(deepseekModels) > 0 {
+		model = promptForModel(deepseekModels)
+	} else {
+		fmt.Println("未找到可用的 DeepSeek 模型，请手动输入模型名（如 deepseek/deepseek-r1:free）")
+		model, _ = reader.ReadString('\n')
+		model = strings.TrimSpace(model)
+	}
+	printStepBox("Step 1: AI Model", fmt.Sprintf("[当前选择]: %s", model))
+
+	// Step 2: 股票代码
+	printStepBox("Step 2: Ticker Symbol",
+		"Enter the ticker symbol(s) to analyze",
+		"说明：可批量，逗号分隔。如 600036,000001",
+		"Default: 600036",
+	)
+	stockInput := interactiveInput("请输入股票代码（可批量，逗号分隔）:", "")
+	stockCodes := splitAndTrim(stockInput)
+	if len(stockCodes) == 0 || stockCodes[0] == "" {
+		fmt.Println("股票代码不能为空！")
+		return
+	}
+	printStepBox("Step 2: Ticker Symbol", fmt.Sprintf("[当前选择]: %s", strings.Join(stockCodes, ", ")))
+
+	// Step 3: 日期
+	today := time.Now()
+	defaultEnd := today.Format("2006-01-02")
+	defaultStart := today.AddDate(0, 0, -30).Format("2006-01-02")
+	printStepBox("Step 3: Analysis Date",
+		"Enter the analysis date range (YYYY-MM-DD)",
+		fmt.Sprintf("Default: %s ~ %s", defaultStart, defaultEnd),
+	)
+	start := interactiveInput(fmt.Sprintf("请输入开始日期(YYYY-MM-DD, 默认%s):", defaultStart), defaultStart)
+	end := interactiveInput(fmt.Sprintf("请输入结束日期(YYYY-MM-DD, 默认%s):", defaultEnd), defaultEnd)
+	printStepBox("Step 3: Analysis Date", fmt.Sprintf("[当前选择]: %s ~ %s", start, end))
+
+	// Step 4: 分析模式
+	printStepBox("Step 4: Analysis Mode",
+		"Select your analysis mode",
+		"说明：深度思考仅用模型推理，联网搜索结合互联网信息",
+	)
+	searchMode := promptForSearchMode()
+	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", func() string {
+		if searchMode {
+			return "联网搜索"
+		} else {
+			return "深度思考"
+		}
+	}()))
+
+	// Step 5: 预测参数
+	printStepBox("Step 5: Prediction Options",
+		"选择预测周期、分析维度、输出格式等",
+		"说明：可多选，回车确认",
+	)
+	periods, dims, searchScope, outputFormat, needConfidence, riskPref := promptForPredictionOptions()
+	printStepBox("Step 5: Prediction Options",
+		fmt.Sprintf("[周期]: %s", strings.Join(periods, ", ")),
+		fmt.Sprintf("[维度]: %s", strings.Join(dims, ", ")),
+		fmt.Sprintf("[输出]: %s", outputFormat),
+		fmt.Sprintf("[置信度]: %v", needConfidence),
+		fmt.Sprintf("[风险偏好]: %s", riskPref),
+		fmt.Sprintf("[联网范围]: %s", strings.Join(searchScope, ", ")),
+	)
+
+	// Step 6: 语言选择
+	printStepBox("Step 6: Language",
+		"Select analysis language",
+		"说明：支持中文和英文",
+	)
+	langOptions := []string{"中文", "英文"}
+	defaultLang := []string{"中文"}
+	langResult := interactiveSelectList("请选择分析语言：", langOptions, defaultLang)
+	var lang string
+	if len(langResult) > 0 && langResult[0] == "英文" {
+		lang = "en"
+	} else {
+		lang = "zh"
+	}
+	printStepBox("Step 6: Language", fmt.Sprintf("[当前选择]: %s", lang))
+
+	// Step 7: 导出格式
+	printStepBox("Step 7: Export Format",
+		"Select export format(s)",
+		"说明：可多选，支持 Markdown/HTML",
+	)
+	exportOptions := []string{"Markdown", "HTML"}
+	defaultExport := []string{"Markdown"}
+	exportResult := interactiveSelectList("请选择导出格式（可多选）：", exportOptions, defaultExport)
+	exportFormats := make([]string, 0, len(exportResult))
+	for _, fmtx := range exportResult {
+		switch fmtx {
+		case "Markdown":
+			exportFormats = append(exportFormats, "md")
+		case "HTML":
+			exportFormats = append(exportFormats, "html")
+		}
+	}
+	if len(exportFormats) == 0 {
+		exportFormats = []string{"md"}
+	}
+	printStepBox("Step 7: Export Format", fmt.Sprintf("[当前选择]: %s", strings.Join(exportFormats, ", ")))
+
+	// Step 8: 邮件推送
+	printStepBox("Step 8: Email Push",
+		"如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）",
+	)
+	emailInput := interactiveInput("如需邮件推送请输入收件人邮箱（可逗号分隔，留空跳过）:", "")
+	emails := splitAndTrim(emailInput)
+	var smtpServer, smtpUser, smtpPass string
+	if len(emails) > 0 && emails[0] != "" {
+		fmt.Println("SMTP服务器、端口、用户名、密码依次输入：")
+		fmt.Print("SMTP服务器: ")
+		smtpServer, _ = reader.ReadString('\n')
+		smtpServer = strings.TrimSpace(smtpServer)
+		fmt.Print("SMTP端口(默认465): ")
+		portInput := interactiveInput("SMTP端口(默认465):", "")
+		if portInput == "" {
+			// smtpPort = 465
+		}
+		fmt.Print("SMTP用户名: ")
+		smtpUser, _ = reader.ReadString('\n')
+		smtpUser = strings.TrimSpace(smtpUser)
+		fmt.Print("SMTP密码: ")
+		smtpPass, _ = reader.ReadString('\n')
+		smtpPass = strings.TrimSpace(smtpPass)
+	}
+	printStepBox("Step 8: Email Push", fmt.Sprintf("[当前邮箱]: %s", strings.Join(emails, ", ")))
+
+	// Step 9: IM 推送
+	printStepBox("Step 9: IM Push",
+		"如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）",
+	)
+	webhook := interactiveInput("如需IM推送请输入Webhook地址（钉钉/企业微信，留空跳过）:", "")
+	printStepBox("Step 9: IM Push", fmt.Sprintf("[当前Webhook]: %s", webhook))
+
+	// Step 10: 分析详细程度
+	printStepBox("Step 10: Research Depth",
+		"Select your research depth level",
+		"说明：影响分析细致程度和报告内容",
+	)
+	detailOptions := []string{"普通分析 - 基础技术指标和简要分析", "详细分析 - 多维度深度分析，包含更多指标", "极致分析 - 最全面的分析，包含所有可用指标和深度洞察"}
+	defaultDetail := []string{"普通分析 - 基础技术指标和简要分析"}
+	detailResult := interactiveSelectList("请选择分析详细程度：", detailOptions, defaultDetail)
+	var detailInput string
+	var detailText string
+	if len(detailResult) > 0 {
+		switch detailResult[0] {
+		case "普通分析 - 基础技术指标和简要分析":
+			detailInput = "normal"
+		case "详细分析 - 多维度深度分析，包含更多指标":
+			detailInput = "detailed"
+		case "极致分析 - 最全面的分析，包含所有可用指标和深度洞察":
+			detailInput = "extreme"
+		default:
+			detailInput = "normal"
+		}
+		detailText = detailResult[0]
+	} else {
+		detailInput = "normal"
+		detailText = "普通分析 - 基础技术指标和简要分析"
+	}
+	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
+
+	// Step 11: 定时周期
+	printStepBox("Step 11: Schedule",
+		"请输入定时任务周期，如 10m、1h、daily（分钟/小时/每天）",
+		"示例：10m 表示每10分钟，1h 表示每小时，daily 表示每天0点",
+	)
+	schedule := interactiveInput("请输入定时任务周期（如10m/1h/daily）:", "1h")
+	dur, err := parseSchedule(schedule)
+	if err != nil {
+		fmt.Println("[定时任务] 周期格式错误：", err)
+		return
+	}
+	printStepBox("Step 11: Schedule", fmt.Sprintf("[当前周期]: %s", schedule))
+
+	params := analysis.AnalysisParams{
+		APIKey:     apiKey,
+		Model:      model,
+		StockCodes: stockCodes,
+		Start:      start,
+		End:        end,
+		SearchMode: searchMode,
+		Periods:    periods,
+		Dims:       dims,
+		Output:     exportFormats,
+		Confidence: needConfidence,
+		Risk:       riskPref,
+		Scope:      searchScope,
+		Lang:       lang,
+	}
+
+	fmt.Println("\n=== 定时任务已启动，Ctrl+C 可随时终止 ===")
+	for {
+		fmt.Printf("\n[%s] 批量分析开始\n", time.Now().Format("2006-01-02 15:04:05"))
+		done := make(chan struct{})
+		go showAnalyzingAnimation(done)
+		prompt := buildPromptWithDetail(params, detailInput)
+		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
+		for _, code := range params.StockCodes {
+			p := params
+			p.StockCodes = []string{code}
+			result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
+				return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
+			})
+			results = append(results, result)
+		}
+		for _, r := range results {
+			fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
+			if r.Err != nil {
+				fmt.Println("[AI] 生成失败:", r.Err)
+			} else {
+				// 分离图片引用、回测框和正文
+				reportLines := strings.Split(r.Report, "\n")
+				var imgLines, btBoxLines, textLines []string
+				inBtBox := false
+				for _, l := range reportLines {
+					if strings.HasPrefix(l, "![图表](") {
+						imgLines = append(imgLines, l)
+					} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
+						inBtBox = true
+						btBoxLines = append(btBoxLines, l)
+					} else if inBtBox {
+						btBoxLines = append(btBoxLines, l)
+						if strings.HasPrefix(l, "└") {
+							inBtBox = false
+						}
+					} else if strings.TrimSpace(l) != "" {
+						textLines = append(textLines, l)
+					}
+				}
+				// 先输出图片引用
+				for _, l := range imgLines {
+					fmt.Println(l)
+				}
+				// 输出回测结果框
+				if len(btBoxLines) > 0 {
+					for _, l := range btBoxLines {
+						fmt.Println(l)
+					}
+				}
+				// 用框输出正文
+				if len(textLines) > 0 {
+					printStepBox("AI 智能分析报告", textLines...)
+				}
+				fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
+			}
+		}
+		close(done)
+		fmt.Printf("[定时任务] 下一次将在 %s 后运行，Ctrl+C 可终止。\n", dur)
+		time.Sleep(dur)
+	}
 }
 
 func main() {
