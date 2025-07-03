@@ -16,6 +16,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/mattn/go-runewidth"
+	"golang.org/x/term"
 )
 
 var globalAPIKey string // 全局缓存API Key
@@ -299,9 +300,20 @@ func buildPromptWithDetail(params analysis.AnalysisParams, detail string) string
 	return basePrompt
 }
 
-// 打印对齐的分块
+func getBoxWidth() int {
+	w, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || w <= 0 {
+		return 120 // fallback
+	}
+	bw := int(float64(w) * 0.98)
+	if bw < 60 {
+		bw = 60
+	}
+	return bw
+}
+
 func printStepBox(title string, lines ...string) {
-	width := 60
+	width := getBoxWidth()
 	titleWidth := runewidth.StringWidth(title)
 	sideLen := (width - 2 - titleWidth) / 2
 	top := "┌" + strings.Repeat("─", sideLen) + title + strings.Repeat("─", width-2-titleWidth-sideLen) + "┐"
@@ -507,6 +519,7 @@ func aiAnalysisInteractiveMenu() {
 	defaultDetail := []string{"普通分析 - 基础技术指标和简要分析"}
 	detailResult := interactiveSelectList("请选择分析详细程度：", detailOptions, defaultDetail)
 	var detailInput string
+	var detailText string
 	if len(detailResult) > 0 {
 		switch detailResult[0] {
 		case "普通分析 - 基础技术指标和简要分析":
@@ -518,10 +531,12 @@ func aiAnalysisInteractiveMenu() {
 		default:
 			detailInput = "normal"
 		}
+		detailText = detailResult[0]
 	} else {
 		detailInput = "normal"
+		detailText = "普通分析 - 基础技术指标和简要分析"
 	}
-	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailResult[0]))
+	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
 
 	params := analysis.AnalysisParams{
 		APIKey:     apiKey,
@@ -567,7 +582,39 @@ func aiAnalysisInteractiveMenu() {
 		if r.Err != nil {
 			fmt.Println("[AI] 生成失败:", r.Err)
 		} else {
-			fmt.Println(r.Report)
+			// 分离图片引用、回测框和正文
+			reportLines := strings.Split(r.Report, "\n")
+			var imgLines, btBoxLines, textLines []string
+			inBtBox := false
+			for _, l := range reportLines {
+				if strings.HasPrefix(l, "![图表](") {
+					imgLines = append(imgLines, l)
+				} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
+					inBtBox = true
+					btBoxLines = append(btBoxLines, l)
+				} else if inBtBox {
+					btBoxLines = append(btBoxLines, l)
+					if strings.HasPrefix(l, "└") {
+						inBtBox = false
+					}
+				} else if strings.TrimSpace(l) != "" {
+					textLines = append(textLines, l)
+				}
+			}
+			// 先输出图片引用
+			for _, l := range imgLines {
+				fmt.Println(l)
+			}
+			// 输出回测结果框
+			if len(btBoxLines) > 0 {
+				for _, l := range btBoxLines {
+					fmt.Println(l)
+				}
+			}
+			// 用框输出正文
+			if len(textLines) > 0 {
+				printStepBox("AI 智能分析报告", textLines...)
+			}
 			fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
 
 			// 邮件推送
@@ -741,7 +788,39 @@ func main() {
 					if r.Err != nil {
 						fmt.Println("[AI] 生成失败:", r.Err)
 					} else {
-						fmt.Println(r.Report)
+						// 分离图片引用、回测框和正文
+						reportLines := strings.Split(r.Report, "\n")
+						var imgLines, btBoxLines, textLines []string
+						inBtBox := false
+						for _, l := range reportLines {
+							if strings.HasPrefix(l, "![图表](") {
+								imgLines = append(imgLines, l)
+							} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
+								inBtBox = true
+								btBoxLines = append(btBoxLines, l)
+							} else if inBtBox {
+								btBoxLines = append(btBoxLines, l)
+								if strings.HasPrefix(l, "└") {
+									inBtBox = false
+								}
+							} else if strings.TrimSpace(l) != "" {
+								textLines = append(textLines, l)
+							}
+						}
+						// 先输出图片引用
+						for _, l := range imgLines {
+							fmt.Println(l)
+						}
+						// 输出回测结果框
+						if len(btBoxLines) > 0 {
+							for _, l := range btBoxLines {
+								fmt.Println(l)
+							}
+						}
+						// 用框输出正文
+						if len(textLines) > 0 {
+							printStepBox("AI 智能分析报告", textLines...)
+						}
 						fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
 
 						// 导出报告功能已移除
@@ -790,7 +869,39 @@ func main() {
 			if r.Err != nil {
 				fmt.Println("[AI] 生成失败:", r.Err)
 			} else {
-				fmt.Println(r.Report)
+				// 分离图片引用、回测框和正文
+				reportLines := strings.Split(r.Report, "\n")
+				var imgLines, btBoxLines, textLines []string
+				inBtBox := false
+				for _, l := range reportLines {
+					if strings.HasPrefix(l, "![图表](") {
+						imgLines = append(imgLines, l)
+					} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
+						inBtBox = true
+						btBoxLines = append(btBoxLines, l)
+					} else if inBtBox {
+						btBoxLines = append(btBoxLines, l)
+						if strings.HasPrefix(l, "└") {
+							inBtBox = false
+						}
+					} else if strings.TrimSpace(l) != "" {
+						textLines = append(textLines, l)
+					}
+				}
+				// 先输出图片引用
+				for _, l := range imgLines {
+					fmt.Println(l)
+				}
+				// 输出回测结果框
+				if len(btBoxLines) > 0 {
+					for _, l := range btBoxLines {
+						fmt.Println(l)
+					}
+				}
+				// 用框输出正文
+				if len(textLines) > 0 {
+					printStepBox("AI 智能分析报告", textLines...)
+				}
 				fmt.Printf("[历史已保存: %s]\n", r.SavedFile)
 
 				// 导出报告功能已移除
