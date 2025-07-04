@@ -17,30 +17,26 @@ RUN go mod download
 COPY . .
 
 # 构建应用
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o quantix .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o quantix .
 
 # 运行阶段
 FROM alpine:latest
 
 # 安装运行时依赖
-RUN apk --no-cache add ca-certificates tzdata
-
-# 创建非root用户
-RUN addgroup -g 1001 -S quantix && \
-    adduser -u 1001 -S quantix -G quantix
+RUN apk --no-cache add ca-certificates tzdata wget
 
 # 设置工作目录
 WORKDIR /app
 
 # 从builder阶段复制二进制文件
 COPY --from=builder /app/quantix .
-
-# 复制配置文件
-COPY --from=builder /app/config.yaml .
+COPY --from=builder /app/charts ./charts
+COPY --from=builder /app/models ./models
+COPY --from=builder /app/uploads ./uploads
 
 # 创建必要的目录
-RUN mkdir -p charts models uploads && \
-    chown -R quantix:quantix /app
+RUN mkdir -p logs && \
+    addgroup -g 1001 -S quantix && adduser -u 1001 -S quantix -G quantix && chown -R quantix:quantix /app
 
 # 切换到非root用户
 USER quantix

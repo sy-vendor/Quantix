@@ -7,17 +7,7 @@ services:
       - "8080:8080"
     environment:
       - QUANTIX_SERVER_PORT=8080
-      - QUANTIX_DATABASE_HOST=postgres
-      - QUANTIX_DATABASE_PORT=5432
-      - QUANTIX_DATABASE_USER=quantix
-      - QUANTIX_DATABASE_PASSWORD=quantix123
-      - QUANTIX_DATABASE_DBNAME=quantix
-      - QUANTIX_REDIS_HOST=redis
-      - QUANTIX_REDIS_PORT=6379
       - QUANTIX_LOG_LEVEL=info
-    depends_on:
-      - postgres
-      - redis
     volumes:
       - ./charts:/app/charts
       - ./models:/app/models
@@ -25,70 +15,6 @@ services:
     restart: unless-stopped
     networks:
       - quantix-network
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      - POSTGRES_USER=quantix
-      - POSTGRES_PASSWORD=quantix123
-      - POSTGRES_DB=quantix
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    networks:
-      - quantix-network
-
-  redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-    networks:
-      - quantix-network
-
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-    restart: unless-stopped
-    networks:
-      - quantix-network
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
-    restart: unless-stopped
-    networks:
-      - quantix-network
-
-volumes:
-  postgres_data:
-  redis_data:
-  prometheus_data:
-  grafana_data:
 
 networks:
   quantix-network:
