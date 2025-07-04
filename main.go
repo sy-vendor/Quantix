@@ -158,6 +158,41 @@ func interactiveInput(title, defaultValue string) string {
 	return result
 }
 
+// survey浮点数输入
+func interactiveInputFloat(title string, defaultValue float64) float64 {
+	var result string
+	prompt := &survey.Input{
+		Message: title,
+		Default: fmt.Sprintf("%g", defaultValue),
+		Help:    "直接输入数字，回车确认",
+	}
+	err := survey.AskOne(prompt, &result, survey.WithHelpInput('?'))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "输入失败: %v\n", err)
+		os.Exit(1)
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(result), 64)
+	if err != nil {
+		return defaultValue
+	}
+	return f
+}
+
+// survey确认输入
+func interactiveConfirm(title string, defaultValue bool) bool {
+	var result bool
+	prompt := &survey.Confirm{
+		Message: title,
+		Default: defaultValue,
+	}
+	err := survey.AskOne(prompt, &result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "输入失败: %v\n", err)
+		os.Exit(1)
+	}
+	return result
+}
+
 func promptForPredictionOptions() (periods, dims, searchScope []string, outputFormat string, needConfidence bool, riskPref string) {
 	// 预测周期多选
 	periodOptions := []string{"1天", "1周", "1月", "3月", "半年", "1年"}
@@ -413,16 +448,12 @@ func aiAnalysisInteractiveMenu() {
 	// Step 4: 分析模式
 	printStepBox("Step 4: Analysis Mode",
 		"Select your analysis mode",
-		"说明：深度思考仅用模型推理，联网搜索结合互联网信息",
+		"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
 	)
-	searchMode := promptForSearchMode()
-	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", func() string {
-		if searchMode {
-			return "联网搜索"
-		} else {
-			return "深度思考"
-		}
-	}()))
+	modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
+	defaultMode := []string{"深度思考（仅用模型推理）"}
+	searchModes := interactiveSelectList("请选择分析模式（可多选）：", modeOptions, defaultMode)
+	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", strings.Join(searchModes, ", ")))
 
 	// Step 5: 预测参数
 	printStepBox("Step 5: Prediction Options",
@@ -458,9 +489,9 @@ func aiAnalysisInteractiveMenu() {
 	// Step 7: 导出格式
 	printStepBox("Step 7: Export Format",
 		"Select export format(s)",
-		"说明：可多选，支持 Markdown/HTML",
+		"说明：可多选，支持 Markdown/HTML/PDF",
 	)
-	exportOptions := []string{"Markdown", "HTML"}
+	exportOptions := []string{"Markdown", "HTML", "PDF"}
 	defaultExport := []string{"Markdown"}
 	exportResult := interactiveSelectList("请选择导出格式（可多选）：", exportOptions, defaultExport)
 	exportFormats := make([]string, 0, len(exportResult))
@@ -470,6 +501,8 @@ func aiAnalysisInteractiveMenu() {
 			exportFormats = append(exportFormats, "md")
 		case "HTML":
 			exportFormats = append(exportFormats, "html")
+		case "PDF":
+			exportFormats = append(exportFormats, "pdf")
 		}
 	}
 	if len(exportFormats) == 0 {
@@ -544,7 +577,6 @@ func aiAnalysisInteractiveMenu() {
 		StockCodes: stockCodes,
 		Start:      start,
 		End:        end,
-		SearchMode: searchMode,
 		Periods:    periods,
 		Dims:       dims,
 		Output:     exportFormats,
@@ -558,24 +590,28 @@ func aiAnalysisInteractiveMenu() {
 	fmt.Printf("分析股票：%s\n", strings.Join(stockCodes, ", "))
 	fmt.Printf("分析期间：%s 至 %s\n", start, end)
 	fmt.Printf("分析模式：%s\n", func() string {
-		if searchMode {
-			return "联网搜索模式"
+		if searchModes[0] == "深度思考（仅用模型推理）" {
+			return "深度思考模式"
 		}
-		return "深度思考模式"
+		return "深度思考+联网搜索模式"
 	}())
 	fmt.Println("正在生成分析报告，请稍候...")
 
 	prompt := buildPromptWithDetail(params, detailInput)
 	done := make(chan struct{})
 	go showAnalyzingAnimation(done)
-	results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
-	for _, code := range params.StockCodes {
-		p := params
-		p.StockCodes = []string{code}
-		result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
-			return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
-		})
-		results = append(results, result)
+	results := make([]analysis.AnalysisResult, 0, len(params.StockCodes)*len(searchModes))
+	for _, mode := range searchModes {
+		for _, code := range params.StockCodes {
+			p := params
+			p.StockCodes = []string{code}
+			p.SearchMode = (mode == "联网搜索（结合最新互联网信息）")
+			p.HybridSearch = (mode == "深度思考+联网搜索（自动融合）")
+			result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool, hybridSearch bool) (string, error) {
+				return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode, hybridSearch)
+			})
+			results = append(results, result)
+		}
 	}
 	for _, r := range results {
 		fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
@@ -744,16 +780,12 @@ func aiScheduleInteractiveMenu() {
 	// Step 4: 分析模式
 	printStepBox("Step 4: Analysis Mode",
 		"Select your analysis mode",
-		"说明：深度思考仅用模型推理，联网搜索结合互联网信息",
+		"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
 	)
-	searchMode := promptForSearchMode()
-	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", func() string {
-		if searchMode {
-			return "联网搜索"
-		} else {
-			return "深度思考"
-		}
-	}()))
+	modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
+	defaultMode := []string{"深度思考（仅用模型推理）"}
+	searchModes := interactiveSelectList("请选择分析模式（可多选）：", modeOptions, defaultMode)
+	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", strings.Join(searchModes, ", ")))
 
 	// Step 5: 预测参数
 	printStepBox("Step 5: Prediction Options",
@@ -789,9 +821,9 @@ func aiScheduleInteractiveMenu() {
 	// Step 7: 导出格式
 	printStepBox("Step 7: Export Format",
 		"Select export format(s)",
-		"说明：可多选，支持 Markdown/HTML",
+		"说明：可多选，支持 Markdown/HTML/PDF",
 	)
-	exportOptions := []string{"Markdown", "HTML"}
+	exportOptions := []string{"Markdown", "HTML", "PDF"}
 	defaultExport := []string{"Markdown"}
 	exportResult := interactiveSelectList("请选择导出格式（可多选）：", exportOptions, defaultExport)
 	exportFormats := make([]string, 0, len(exportResult))
@@ -801,6 +833,8 @@ func aiScheduleInteractiveMenu() {
 			exportFormats = append(exportFormats, "md")
 		case "HTML":
 			exportFormats = append(exportFormats, "html")
+		case "PDF":
+			exportFormats = append(exportFormats, "pdf")
 		}
 	}
 	if len(exportFormats) == 0 {
@@ -869,8 +903,24 @@ func aiScheduleInteractiveMenu() {
 	}
 	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
 
-	// Step 11: 定时周期
-	printStepBox("Step 11: Schedule",
+	// Step 11: 回测参数
+	printStepBox("Step 11: Backtest Config",
+		"Configure backtest parameters",
+		"说明：可自定义手续费、滑点、分批建仓比例、是否复利",
+	)
+	feeRate := interactiveInputFloat("请输入手续费率（如0.0003，默认万3）：", 0.0003)
+	slippage := interactiveInputFloat("请输入滑点比例（如0.001，默认千1）：", 0.001)
+	batchRatio := interactiveInputFloat("请输入分批建仓比例（0~1，1为全仓，默认1）：", 1)
+	compound := interactiveConfirm("是否启用复利？（Y/n，默认Y）", true)
+	backtestCfg := analysis.BacktestConfig{
+		FeeRate:    feeRate,
+		Slippage:   slippage,
+		BatchRatio: batchRatio,
+		Compound:   compound,
+	}
+
+	// Step 12: 定时周期
+	printStepBox("Step 12: Schedule",
 		"请输入定时任务周期，如 10m、1h、daily（分钟/小时/每天）",
 		"示例：10m 表示每10分钟，1h 表示每小时，daily 表示每天0点",
 	)
@@ -880,7 +930,7 @@ func aiScheduleInteractiveMenu() {
 		fmt.Println("[定时任务] 周期格式错误：", err)
 		return
 	}
-	printStepBox("Step 11: Schedule", fmt.Sprintf("[当前周期]: %s", schedule))
+	printStepBox("Step 12: Schedule", fmt.Sprintf("[当前周期]: %s", schedule))
 
 	params := analysis.AnalysisParams{
 		APIKey:     apiKey,
@@ -888,7 +938,6 @@ func aiScheduleInteractiveMenu() {
 		StockCodes: stockCodes,
 		Start:      start,
 		End:        end,
-		SearchMode: searchMode,
 		Periods:    periods,
 		Dims:       dims,
 		Output:     exportFormats,
@@ -904,14 +953,31 @@ func aiScheduleInteractiveMenu() {
 		done := make(chan struct{})
 		go showAnalyzingAnimation(done)
 		prompt := buildPromptWithDetail(params, detailInput)
-		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
+
+		// 多股并行回测
 		for _, code := range params.StockCodes {
-			p := params
-			p.StockCodes = []string{code}
-			result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
-				return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
-			})
-			results = append(results, result)
+			// 回测使用当前日期前2个月
+			today := time.Now()
+			backtestStart := today.AddDate(0, -2, 0).Format("2006-01-02")
+			backtestEnd := today.Format("2006-01-02")
+			stockData, indicators, _ := analysis.FetchStockHistory(code, backtestStart, backtestEnd, params.APIKey)
+			backtest := analysis.RunDefaultBacktest(stockData, indicators, backtestCfg)
+			fmt.Printf("\n=== [%s] 回测明细（%s 至 %s）===\n", code, backtestStart, backtestEnd)
+			analysis.PrintBacktestTrades(backtest.Trades)
+		}
+
+		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes)*len(searchModes))
+		for _, mode := range searchModes {
+			for _, code := range params.StockCodes {
+				p := params
+				p.StockCodes = []string{code}
+				p.SearchMode = (mode == "联网搜索（结合最新互联网信息）")
+				p.HybridSearch = (mode == "深度思考+联网搜索（自动融合）")
+				result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool, hybridSearch bool) (string, error) {
+					return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode, hybridSearch)
+				})
+				results = append(results, result)
+			}
 		}
 		for _, r := range results {
 			fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
@@ -1007,7 +1073,7 @@ func main() {
 	historyFlag := flag.Bool("history", false, "列出分析历史记录")
 	showFlag := flag.String("show", "", "显示指定历史分析记录")
 	scheduleFlag := flag.String("schedule", "", "定时任务周期，如 1h、daily（预留）")
-	exportFlag := flag.String("export", "md", "导出格式，逗号分隔，支持md,html")
+	exportFlag := flag.String("export", "md", "导出格式，逗号分隔，支持md,html,pdf")
 	emailFlag := flag.String("email", "", "收件人邮箱，逗号分隔")
 	smtpServerFlag := flag.String("smtp-server", "", "SMTP服务器")
 	smtpPortFlag := flag.Int("smtp-port", 465, "SMTP端口")
@@ -1028,20 +1094,35 @@ func main() {
 	// 判断是否为命令行参数模式
 	if *apiKeyFlag != "" && *modelFlag != "" && *stockFlag != "" {
 		stockCodes := splitAndTrim(*stockFlag)
+		var hybridSearch bool
+		if *modeFlag == "hybrid" {
+			hybridSearch = true
+		}
+		// 定义 searchModes
+		var searchModes []string
+		switch *modeFlag {
+		case "search":
+			searchModes = []string{"联网搜索（结合最新互联网信息）"}
+		case "hybrid":
+			searchModes = []string{"深度思考+联网搜索（自动融合）"}
+		default:
+			searchModes = []string{"深度思考（仅用模型推理）"}
+		}
 		params := analysis.AnalysisParams{
-			APIKey:     *apiKeyFlag,
-			Model:      *modelFlag,
-			StockCodes: stockCodes,
-			Start:      *startFlag,
-			End:        *endFlag,
-			SearchMode: (*modeFlag == "search"),
-			Periods:    splitAndTrim(*periodsFlag),
-			Dims:       splitAndTrim(*dimsFlag),
-			Output:     splitAndTrim(*outputFlag),
-			Confidence: (*confidenceFlag == "Y" || *confidenceFlag == "y"),
-			Risk:       *riskFlag,
-			Scope:      splitAndTrim(*scopeFlag),
-			Lang:       *langFlag,
+			APIKey:       *apiKeyFlag,
+			Model:        *modelFlag,
+			StockCodes:   stockCodes,
+			Start:        *startFlag,
+			End:          *endFlag,
+			SearchMode:   (*modeFlag == "search"),
+			HybridSearch: hybridSearch,
+			Periods:      splitAndTrim(*periodsFlag),
+			Dims:         splitAndTrim(*dimsFlag),
+			Output:       splitAndTrim(*outputFlag),
+			Confidence:   (*confidenceFlag == "Y" || *confidenceFlag == "y"),
+			Risk:         *riskFlag,
+			Scope:        splitAndTrim(*scopeFlag),
+			Lang:         *langFlag,
 		}
 		emails := splitAndTrim(*emailFlag)
 		exportFormats := splitAndTrim(*exportFlag)
@@ -1064,14 +1145,18 @@ func main() {
 				done := make(chan struct{})
 				go showAnalyzingAnimation(done)
 				prompt := buildPromptWithDetail(params, *detailFlag)
-				results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
-				for _, code := range params.StockCodes {
-					p := params
-					p.StockCodes = []string{code}
-					result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
-						return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
-					})
-					results = append(results, result)
+				results := make([]analysis.AnalysisResult, 0, len(params.StockCodes)*len(searchModes))
+				for _, mode := range searchModes {
+					for _, code := range params.StockCodes {
+						p := params
+						p.StockCodes = []string{code}
+						p.SearchMode = (mode == "联网搜索（结合最新互联网信息）")
+						p.HybridSearch = (mode == "深度思考+联网搜索（自动融合）")
+						result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool, hybridSearch bool) (string, error) {
+							return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode, hybridSearch)
+						})
+						results = append(results, result)
+					}
 				}
 				for _, r := range results {
 					fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)
@@ -1145,14 +1230,18 @@ func main() {
 		done := make(chan struct{})
 		go showAnalyzingAnimation(done)
 		prompt := buildPromptWithDetail(params, *detailFlag)
-		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes))
-		for _, code := range params.StockCodes {
-			p := params
-			p.StockCodes = []string{code}
-			result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool) (string, error) {
-				return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode)
-			})
-			results = append(results, result)
+		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes)*len(searchModes))
+		for _, mode := range searchModes {
+			for _, code := range params.StockCodes {
+				p := params
+				p.StockCodes = []string{code}
+				p.SearchMode = (mode == "联网搜索（结合最新互联网信息）")
+				p.HybridSearch = (mode == "深度思考+联网搜索（自动融合）")
+				result := analysis.AnalyzeOne(p, func(stock, _prompt, apiKey, apiURL, model string, searchMode bool, hybridSearch bool) (string, error) {
+					return analysis.GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions", model, searchMode, hybridSearch)
+				})
+				results = append(results, result)
+			}
 		}
 		for _, r := range results {
 			fmt.Printf("\n=== [%s] AI 智能分析报告 ===\n", r.StockCode)

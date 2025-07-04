@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -17,6 +18,15 @@ func GenerateCharts(stockCode string, stockData []StockData, indicators []Techni
 		return nil, nil
 	}
 	os.MkdirAll(outDir, 0755)
+
+	// 新增：生成前清理 charts 目录下所有 .html 文件
+	htmlFiles, _ := ioutil.ReadDir(outDir)
+	for _, f := range htmlFiles {
+		if !f.IsDir() && filepath.Ext(f.Name()) == ".html" {
+			os.Remove(filepath.Join(outDir, f.Name()))
+		}
+	}
+
 	var paths []string
 
 	// 1. K线图
@@ -36,6 +46,7 @@ func GenerateCharts(stockCode string, stockData []StockData, indicators []Techni
 	_ = kline.Render(f1)
 	klinePNG := filepath.Join(outDir, stockCode+"-kline.png")
 	_ = html2png(klinePath, klinePNG)
+	os.Remove(klinePath)
 	paths = append(paths, klinePNG)
 
 	// 2. 均线图
@@ -58,6 +69,7 @@ func GenerateCharts(stockCode string, stockData []StockData, indicators []Techni
 	_ = ma.Render(f2)
 	maPNG := filepath.Join(outDir, stockCode+"-ma.png")
 	_ = html2png(maPath, maPNG)
+	os.Remove(maPath)
 	paths = append(paths, maPNG)
 
 	// 3. 成交量图
@@ -73,6 +85,7 @@ func GenerateCharts(stockCode string, stockData []StockData, indicators []Techni
 	_ = vol.Render(f3)
 	volPNG := filepath.Join(outDir, stockCode+"-vol.png")
 	_ = html2png(volPath, volPNG)
+	os.Remove(volPath)
 	paths = append(paths, volPNG)
 
 	return paths, nil

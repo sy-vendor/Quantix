@@ -12,7 +12,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/SebastiaanKlippert/go-wkhtmltopdf"
+	"context"
+
+	"regexp"
+
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
+	"github.com/mattn/go-runewidth"
 	"github.com/russross/blackfriday/v2"
 	"golang.org/x/term"
 )
@@ -24,20 +30,21 @@ import (
 // StockData、TechnicalIndicator用于chart.go
 
 type AnalysisParams struct {
-	APIKey     string
-	Model      string
-	StockCodes []string
-	Start      string
-	End        string
-	SearchMode bool
-	Periods    []string
-	Dims       []string
-	Output     []string
-	Confidence bool
-	Risk       string
-	Scope      []string
-	Lang       string
-	Prompt     string // 可选，手动传递prompt
+	APIKey       string
+	Model        string
+	StockCodes   []string
+	Start        string
+	End          string
+	SearchMode   bool
+	HybridSearch bool // 新增，混合模式
+	Periods      []string
+	Dims         []string
+	Output       []string
+	Confidence   bool
+	Risk         string
+	Scope        []string
+	Lang         string
+	Prompt       string // 可选，手动传递prompt
 }
 
 type AnalysisResult struct {
@@ -171,8 +178,17 @@ func getMA(ind []TechnicalIndicator, idx, n int) float64 {
 
 // ================== 回测引擎 =====================
 
+// 回测参数结构体
+// 新增：手续费、滑点、分批建仓、复利
+type BacktestConfig struct {
+	FeeRate    float64 // 手续费率（如0.0003）
+	Slippage   float64 // 滑点（如0.001）
+	BatchRatio float64 // 分批建仓比例（如0.1表示每次买入10%仓位）
+	Compound   bool    // 是否复利
+}
+
 // RunBacktest 执行回测，支持可扩展策略
-func RunBacktest(data []StockData, ind []TechnicalIndicator, strategy BacktestStrategy, initialCash float64) BacktestResult {
+func RunBacktest(data []StockData, ind []TechnicalIndicator, strategy BacktestStrategy, initialCash float64, cfg BacktestConfig) BacktestResult {
 	var (
 		cash         = initialCash
 		pos          = false
@@ -186,38 +202,52 @@ func RunBacktest(data []StockData, ind []TechnicalIndicator, strategy BacktestSt
 		price := data[i].Close
 		if !pos {
 			if ok, reason := strategy.ShouldBuy(i, data, ind, pos, cash); ok {
-				volume = cash / price
-				buyPrice = price
+				batchCash := cash
+				if cfg.BatchRatio > 0 && cfg.BatchRatio < 1 {
+					batchCash = cash * cfg.BatchRatio
+				}
+				buyPrice = price * (1 + cfg.Slippage)
+				vol := batchCash / buyPrice
+				fee := batchCash * cfg.FeeRate
+				trades = append(trades, BacktestTrade{Date: data[i].Date, Type: "buy", Price: buyPrice, Volume: vol, Reason: reason + fmt.Sprintf(" 手续费:%.2f", fee)})
+				cash -= batchCash + fee
+				volume += vol
 				pos = true
-				trades = append(trades, BacktestTrade{Date: data[i].Date, Type: "buy", Price: price, Volume: volume, Reason: reason})
-				cash = 0
 			}
 		} else {
 			if ok, reason := strategy.ShouldSell(i, data, ind, pos, cash, buyPrice); ok {
-				cash = volume * price
-				if price > buyPrice {
+				sellPrice := price * (1 - cfg.Slippage)
+				proceeds := volume * sellPrice
+				fee := proceeds * cfg.FeeRate
+				cash += proceeds - fee
+				if sellPrice > buyPrice {
 					wins++
 				} else {
 					losses++
 				}
-				trades = append(trades, BacktestTrade{Date: data[i].Date, Type: "sell", Price: price, Volume: volume, Reason: reason})
-				pos = false
-				buyPrice = 0
+				trades = append(trades, BacktestTrade{Date: data[i].Date, Type: "sell", Price: sellPrice, Volume: volume, Reason: reason + fmt.Sprintf(" 手续费:%.2f", fee)})
 				volume = 0
+				buyPrice = 0
+				pos = false
+				if !cfg.Compound {
+					cash = initialCash // 非复利模式，重置现金
+				}
 			}
 		}
 		// 资金曲线
 		if pos {
-			equityCurve = append(equityCurve, volume*price)
+			equityCurve = append(equityCurve, cash+volume*price)
 		} else {
 			equityCurve = append(equityCurve, cash)
 		}
 	}
 	// 收盘强平
 	if pos {
-		price := data[len(data)-1].Close
-		cash = volume * price
-		trades = append(trades, BacktestTrade{Date: data[len(data)-1].Date, Type: "sell", Price: price, Volume: volume, Reason: "收盘强平"})
+		price := data[len(data)-1].Close * (1 - cfg.Slippage)
+		proceeds := volume * price
+		fee := proceeds * cfg.FeeRate
+		cash += proceeds - fee
+		trades = append(trades, BacktestTrade{Date: data[len(data)-1].Date, Type: "sell", Price: price, Volume: volume, Reason: "收盘强平 手续费:" + fmt.Sprintf("%.2f", fee)})
 		if price > buyPrice {
 			wins++
 		} else {
@@ -263,9 +293,15 @@ func calcMaxDrawdown(equity []float64) float64 {
 // ================== 回测集成入口（供主流程调用） =====================
 
 // RunDefaultBacktest 提供主流程一键调用，策略和参数可后续扩展
-func RunDefaultBacktest(data []StockData, ind []TechnicalIndicator) BacktestResult {
+func RunDefaultBacktest(data []StockData, ind []TechnicalIndicator, cfg ...BacktestConfig) BacktestResult {
+	var c BacktestConfig
+	if len(cfg) > 0 {
+		c = cfg[0]
+	} else {
+		c = BacktestConfig{FeeRate: 0.0003, Slippage: 0.001, BatchRatio: 1, Compound: true}
+	}
 	strategy := MAStrategy{ShortMA: 5, LongMA: 20, StopLoss: 0.05, TakeProfit: 0.1}
-	return RunBacktest(data, ind, strategy, 100000)
+	return RunBacktest(data, ind, strategy, 100000, c)
 }
 
 // 函数声明补充
@@ -379,7 +415,80 @@ func markdownToHTML(md string) string {
 	return string(html)
 }
 
-func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, string, string, bool) (string, error)) AnalysisResult {
+// 新增：将 Markdown 图片引用替换为绝对 file:// 路径的 <img> 标签
+func replaceImagesWithAbsHTML(md string) string {
+	imgRe := regexp.MustCompile(`!\[.*?\]\((.*?)\)`)
+	return imgRe.ReplaceAllStringFunc(md, func(s string) string {
+		m := imgRe.FindStringSubmatch(s)
+		if len(m) < 2 {
+			return s
+		}
+		imgPath := m[1]
+		abs, err := filepath.Abs(imgPath)
+		if err != nil {
+			return s
+		}
+		return fmt.Sprintf(`<img src="file://%s" style="max-width:100%%;">`, abs)
+	})
+}
+
+// 新增：将回测框用 <pre> 包裹
+func wrapBacktestBoxHTML(report string) string {
+	re := regexp.MustCompile(`(?s)(┌[\s\S]+?┘)`) // 匹配整个框
+	return re.ReplaceAllStringFunc(report, func(box string) string {
+		return "<pre style=\"font-family:monospace;\">" + box + "</pre>"
+	})
+}
+
+// 新增：将行情数据结构化为表格文本
+func FormatStockDataTable(stockData []StockData, indicators []TechnicalIndicator) string {
+	if len(stockData) == 0 {
+		return ""
+	}
+	head := "\n【历史行情数据表】\n| 日期 | 开盘 | 收盘 | 最高 | 最低 | 成交量 | MA5 | MA10 | MA20 | MA60 |\n|------|------|------|------|------|--------|-----|------|------|------|\n"
+	rows := ""
+	for i, d := range stockData {
+		if i >= len(indicators) {
+			break
+		}
+		row := fmt.Sprintf("| %s | %.2f | %.2f | %.2f | %.2f | %.0f | %.2f | %.2f | %.2f | %.2f |\n",
+			d.Date.Format("2006-01-02"), d.Open, d.Close, d.High, d.Low, d.Volume,
+			indicators[i].MA5, indicators[i].MA10, indicators[i].MA20, indicators[i].MA60)
+		rows += row
+		if i > 30 {
+			break
+		} // 只展示最近30天，防止prompt过长
+	}
+	return head + rows
+}
+
+// 只保留最近N个月的数据（支持动态起止）
+func filterRecentDataToDate(stockData []StockData, indicators []TechnicalIndicator, endDate time.Time, months int) ([]StockData, []TechnicalIndicator) {
+	if len(stockData) == 0 {
+		return stockData, indicators
+	}
+	cutoff := endDate.AddDate(0, -months, 0)
+	idx := 0
+	for i, d := range stockData {
+		if (d.Date.After(cutoff) || d.Date.Equal(cutoff)) && d.Date.Before(endDate.AddDate(0, 0, 1)) {
+			idx = i
+			break
+		}
+	}
+	// 只保留截止endDate的半年数据
+	var filteredData []StockData
+	var filteredInd []TechnicalIndicator
+	for i := idx; i < len(stockData); i++ {
+		if stockData[i].Date.After(endDate) {
+			break
+		}
+		filteredData = append(filteredData, stockData[i])
+		filteredInd = append(filteredInd, indicators[i])
+	}
+	return filteredData, filteredInd
+}
+
+func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, string, string, bool, bool) (string, error)) AnalysisResult {
 	prompt := params.Prompt
 	if prompt == "" {
 		prompt = BuildPrompt(params)
@@ -387,15 +496,22 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 
 	// 生成图表
 	stockData, indicators, _ := FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
+	if len(stockData) > 0 {
+		latest := stockData[len(stockData)-1].Date
+		// fmt.Fprintf(os.Stderr, "[调试] 实际可用K线最新日期: %s\n", latest.Format("2006-01-02"))
+		stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
+	}
 	chartPaths, _ := GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
 
 	// ====== 新增：回测并插入结果到 prompt ======
 	backtest := RunDefaultBacktest(stockData, indicators)
 	backtestSummary := formatBacktestSummary(backtest)
-	prompt = backtestSummary + "\n" + prompt
+	// 新增：行情表格注入
+	stockTable := FormatStockDataTable(stockData, indicators)
+	prompt = backtestSummary + stockTable + "\n" + prompt
 	// =========================================
 
-	report, err := genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode)
+	report, err := genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode, params.HybridSearch)
 	if err != nil {
 		return AnalysisResult{StockCode: params.StockCodes[0], Err: err}
 	}
@@ -423,6 +539,8 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		var fname string
 		fbase := fmt.Sprintf("%s-%s-%s", params.StockCodes[0], params.End, time.Now().Format("150405"))
 		fpath := ""
+		// 先处理图片和回测框
+		reportHTML := wrapBacktestBoxHTML(replaceImagesWithAbsHTML(report))
 		if ext == "md" {
 			fname = fbase + ".md"
 			fpath = filepath.Join("history", fname)
@@ -436,7 +554,13 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		} else if ext == "html" {
 			fname = fbase + ".html"
 			fpath = filepath.Join("history", fname)
-			html := "<meta charset=\"utf-8\">\n" + markdownToHTML(report)
+			// 回测明细用表格替换
+			reportHTML2 := reportHTML
+			if len(backtest.Trades) > 0 {
+				table := BacktestTradesToHTMLTable(backtest.Trades)
+				reportHTML2 = strings.Replace(reportHTML, wrapBacktestBoxHTML(formatBacktestBox(backtest)), table, 1)
+			}
+			html := "<meta charset=\"utf-8\">\n" + exportCSS + markdownToHTML(reportHTML2)
 			err := ioutil.WriteFile(fpath, []byte(html), 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[错误] 写入HTML文件失败: %s\n", err)
@@ -447,27 +571,19 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		} else if ext == "pdf" {
 			fname = fbase + ".pdf"
 			fpath = filepath.Join("history", fname)
-			html := "<meta charset=\"utf-8\">\n" + markdownToHTML(report)
-			pdfg, _ := wkhtmltopdf.NewPDFGenerator()
-			pdfg.AddPage(wkhtmltopdf.NewPageReader(strings.NewReader(html)))
-			pdfg.Dpi.Set(300)
-			pdfg.Orientation.Set(wkhtmltopdf.OrientationPortrait)
-			pdfg.PageSize.Set(wkhtmltopdf.PageSizeA4)
-			pdfg.NoCollate.Set(false)
-			pdfg.Grayscale.Set(false)
-			pdfg.MarginLeft.Set(10)
-			pdfg.MarginRight.Set(10)
-			pdfg.MarginTop.Set(10)
-			pdfg.MarginBottom.Set(10)
-			err := pdfg.Create()
+			htmlPath := fpath + ".tmp.html"
+			// 回测明细用表格替换
+			reportHTML2 := reportHTML
+			if len(backtest.Trades) > 0 {
+				table := BacktestTradesToHTMLTable(backtest.Trades)
+				reportHTML2 = strings.Replace(reportHTML, wrapBacktestBoxHTML(formatBacktestBox(backtest)), table, 1)
+			}
+			htmlContent := "<meta charset=\"utf-8\">\n" + exportCSS + markdownToHTML(reportHTML2)
+			ioutil.WriteFile(htmlPath, []byte(htmlContent), 0644)
+			err := htmlToPDF(htmlPath, fpath)
+			os.Remove(htmlPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[错误] 生成PDF失败: %s\n", err)
-				writeErr = err
-				continue
-			}
-			err = pdfg.WriteFile(fpath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[错误] 写入PDF文件失败: %s\n", err)
 				writeErr = err
 			} else {
 				fmt.Println("[调试] 已写入PDF文件：", fpath)
@@ -541,4 +657,156 @@ func printStepBoxStr(title string, lines ...string) string {
 	}
 	bottom := "└" + strings.Repeat("─", width-2) + "┘\n"
 	return top + body + bottom
+}
+
+func htmlToPDF(htmlPath, pdfPath string) error {
+	ctx, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+	var pdfBuf []byte
+	absPath, _ := filepath.Abs(htmlPath)
+	fileURL := "file://" + absPath
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(fileURL),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			var err error
+			pdfBuf, _, err = page.PrintToPDF().WithPrintBackground(true).Do(ctx)
+			return err
+		}),
+	)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(pdfPath, pdfBuf, 0644)
+}
+
+const exportCSS = `
+<style>
+body { font-family: 'SF Pro', 'Arial', 'Microsoft YaHei', sans-serif; font-size: 15px; margin: 24px; }
+h1,h2,h3,h4 { font-weight: bold; margin: 1.2em 0 0.6em 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #888; padding: 8px 12px; text-align: left; }
+th { background: #f0f0f0; }
+pre { background: #222; color: #fff; border-radius: 6px; border: 1px solid #444; padding: 14px; font-size: 15px; overflow-x: auto; margin: 1em 0; font-family: monospace; white-space: pre-wrap; }
+strong { font-weight: bold; }
+img { display: block; margin: 18px auto; max-width: 95%; border-radius: 4px; box-shadow: 0 2px 8px #0001; }
+ul,ol { margin: 1em 0 1em 2em; }
+code { background: #f5f5f5; color: #c7254e; padding: 2px 4px; border-radius: 4px; }
+</style>
+`
+
+// 修改 GenerateAIReportWithConfigAndSearch 实现，支持 hybridSearch
+func GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, apiURL, model string, searchMode bool, hybridSearch bool) (string, error) {
+	// 构造请求体
+	body := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": "你是一个智能股票分析助手。"},
+			{"role": "user", "content": prompt},
+		},
+		"temperature": 0.7,
+		"max_tokens":  2000,
+	}
+	if hybridSearch {
+		body["search"] = true // 混合模式，自动融合
+	} else if searchMode {
+		body["search"] = true // 兼容原有联网搜索
+	}
+	data, _ := json.Marshal(body)
+	client := &http.Client{}
+	req, _ := http.NewRequest("POST", apiURL, strings.NewReader(string(data)))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respData, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("DeepSeek API 错误: %s", string(respData))
+	}
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	err = json.Unmarshal(respData, &result)
+	if err != nil {
+		return "", err
+	}
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("DeepSeek API 无返回内容")
+	}
+	return result.Choices[0].Message.Content, nil
+}
+
+// 字符串宽度填充，兼容中英文
+func pad(s string, width int) string {
+	w := runewidth.StringWidth(s)
+	if w < width {
+		return s + strings.Repeat(" ", width-w)
+	}
+	if w > width {
+		rs := []rune(s)
+		cut := 0
+		for i := range rs {
+			if runewidth.StringWidth(string(rs[:i+1])) > width {
+				break
+			}
+			cut = i + 1
+		}
+		return string(rs[:cut])
+	}
+	return s
+}
+
+// 打印回测明细（中英文对齐）
+func PrintBacktestTrades(trades []BacktestTrade) {
+	if len(trades) == 0 {
+		fmt.Println("暂无交易记录")
+		return
+	}
+	headers := []string{"日期", "操作", "价格", "数量", "原因"}
+	widths := []int{12, 4, 8, 8, 35}
+	fmt.Println("┌──────────────┬──────┬──────────┬──────────┬─────────────────────────────────────┐")
+	fmt.Printf("│ %s │ %s │ %s │ %s │ %s │\n",
+		pad(headers[0], widths[0]), pad(headers[1], widths[1]), pad(headers[2], widths[2]),
+		pad(headers[3], widths[3]), pad(headers[4], widths[4]))
+	fmt.Println("├──────────────┼──────┼──────────┼──────────┼─────────────────────────────────────┤")
+	for _, t := range trades {
+		date := pad(t.Date.Format("2006-01-02"), widths[0])
+		op := pad(t.Type, widths[1])
+		price := pad(fmt.Sprintf("%.2f", t.Price), widths[2])
+		volume := pad(fmt.Sprintf("%.0f", t.Volume), widths[3])
+		reason := pad(t.Reason, widths[4])
+		fmt.Printf("│ %s │ %s │ %s │ %s │ %s │\n", date, op, price, volume, reason)
+	}
+	fmt.Println("└──────────────┴──────┴──────────┴──────────┴─────────────────────────────────────┘")
+}
+
+// 回测明细转HTML表格
+func BacktestTradesToHTMLTable(trades []BacktestTrade) string {
+	if len(trades) == 0 {
+		return "<p>暂无交易记录</p>"
+	}
+	headers := []string{"日期", "操作", "价格", "数量", "原因"}
+	html := `<table class="bt-table"><thead><tr>`
+	for _, h := range headers {
+		html += "<th>" + h + "</th>"
+	}
+	html += "</tr></thead><tbody>"
+	for _, t := range trades {
+		row := "<tr>"
+		row += "<td>" + t.Date.Format("2006-01-02") + "</td>"
+		row += "<td>" + t.Type + "</td>"
+		row += "<td>" + fmt.Sprintf("%.2f", t.Price) + "</td>"
+		row += "<td>" + fmt.Sprintf("%.0f", t.Volume) + "</td>"
+		row += "<td>" + t.Reason + "</td>"
+		row += "</tr>"
+		html += row
+	}
+	html += "</tbody></table>"
+	return html
 }

@@ -77,34 +77,6 @@ func GenerateAIReportWithConfig(stockCode, analysisData, apiKey, apiURL, model s
 	return dsResp.Choices[0].Message.Content, nil
 }
 
-// GenerateAIReportWithConfigAndSearch 支持 search 参数
-func GenerateAIReportWithConfigAndSearch(stockCode, analysisData, apiKey, apiURL, model string, search bool) (string, error) {
-	if apiKey == "" {
-		return "", fmt.Errorf("DeepSeek API Key 未设置")
-	}
-	requestBody := deepSeekRequest{
-		Model: model,
-		Messages: []deepMessage{{
-			Role:    "user",
-			Content: analysisData,
-		}},
-	}
-	if search {
-		// 仅在需要联网搜索时加字段
-		tmp := map[string]interface{}{}
-		b, _ := json.Marshal(requestBody)
-		json.Unmarshal(b, &tmp)
-		tmp["search"] = true
-		b2, _ := json.Marshal(tmp)
-		return callDeepSeekAPI(apiKey, apiURL, b2)
-	}
-	body, err := json.Marshal(requestBody)
-	if err != nil {
-		return "", err
-	}
-	return callDeepSeekAPI(apiKey, apiURL, body)
-}
-
 func callDeepSeekAPI(apiKey, apiURL string, body []byte) (string, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(body))
