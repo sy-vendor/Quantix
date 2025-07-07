@@ -618,21 +618,12 @@ func aiAnalysisInteractiveMenu() {
 		if r.Err != nil {
 			fmt.Println("[AI] 生成失败:", r.Err)
 		} else {
-			// 分离图片引用、回测框和正文
+			// 分离图片引用和正文
 			reportLines := strings.Split(r.Report, "\n")
-			var imgLines, btBoxLines, textLines []string
-			inBtBox := false
+			var imgLines, textLines []string
 			for _, l := range reportLines {
 				if strings.HasPrefix(l, "![图表](") {
 					imgLines = append(imgLines, l)
-				} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
-					inBtBox = true
-					btBoxLines = append(btBoxLines, l)
-				} else if inBtBox {
-					btBoxLines = append(btBoxLines, l)
-					if strings.HasPrefix(l, "└") {
-						inBtBox = false
-					}
 				} else if strings.TrimSpace(l) != "" {
 					textLines = append(textLines, l)
 				}
@@ -640,12 +631,6 @@ func aiAnalysisInteractiveMenu() {
 			// 先输出图片引用
 			for _, l := range imgLines {
 				fmt.Println(l)
-			}
-			// 输出回测结果框
-			if len(btBoxLines) > 0 {
-				for _, l := range btBoxLines {
-					fmt.Println(l)
-				}
 			}
 			// 用框输出正文
 			if len(textLines) > 0 {
@@ -903,22 +888,6 @@ func aiScheduleInteractiveMenu() {
 	}
 	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
 
-	// Step 11: 回测参数
-	printStepBox("Step 11: Backtest Config",
-		"Configure backtest parameters",
-		"说明：可自定义手续费、滑点、分批建仓比例、是否复利",
-	)
-	feeRate := interactiveInputFloat("请输入手续费率（如0.0003，默认万3）：", 0.0003)
-	slippage := interactiveInputFloat("请输入滑点比例（如0.001，默认千1）：", 0.001)
-	batchRatio := interactiveInputFloat("请输入分批建仓比例（0~1，1为全仓，默认1）：", 1)
-	compound := interactiveConfirm("是否启用复利？（Y/n，默认Y）", true)
-	backtestCfg := analysis.BacktestConfig{
-		FeeRate:    feeRate,
-		Slippage:   slippage,
-		BatchRatio: batchRatio,
-		Compound:   compound,
-	}
-
 	// Step 12: 定时周期
 	printStepBox("Step 12: Schedule",
 		"请输入定时任务周期，如 10m、1h、daily（分钟/小时/每天）",
@@ -954,18 +923,6 @@ func aiScheduleInteractiveMenu() {
 		go showAnalyzingAnimation(done)
 		prompt := buildPromptWithDetail(params, detailInput)
 
-		// 多股并行回测
-		for _, code := range params.StockCodes {
-			// 回测使用当前日期前2个月
-			today := time.Now()
-			backtestStart := today.AddDate(0, -2, 0).Format("2006-01-02")
-			backtestEnd := today.Format("2006-01-02")
-			stockData, indicators, _ := analysis.FetchStockHistory(code, backtestStart, backtestEnd, params.APIKey)
-			backtest := analysis.RunDefaultBacktest(stockData, indicators, backtestCfg)
-			fmt.Printf("\n=== [%s] 回测明细（%s 至 %s）===\n", code, backtestStart, backtestEnd)
-			analysis.PrintBacktestTrades(backtest.Trades)
-		}
-
 		results := make([]analysis.AnalysisResult, 0, len(params.StockCodes)*len(searchModes))
 		for _, mode := range searchModes {
 			for _, code := range params.StockCodes {
@@ -984,21 +941,12 @@ func aiScheduleInteractiveMenu() {
 			if r.Err != nil {
 				fmt.Println("[AI] 生成失败:", r.Err)
 			} else {
-				// 分离图片引用、回测框和正文
+				// 分离图片引用和正文
 				reportLines := strings.Split(r.Report, "\n")
-				var imgLines, btBoxLines, textLines []string
-				inBtBox := false
+				var imgLines, textLines []string
 				for _, l := range reportLines {
 					if strings.HasPrefix(l, "![图表](") {
 						imgLines = append(imgLines, l)
-					} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
-						inBtBox = true
-						btBoxLines = append(btBoxLines, l)
-					} else if inBtBox {
-						btBoxLines = append(btBoxLines, l)
-						if strings.HasPrefix(l, "└") {
-							inBtBox = false
-						}
 					} else if strings.TrimSpace(l) != "" {
 						textLines = append(textLines, l)
 					}
@@ -1006,12 +954,6 @@ func aiScheduleInteractiveMenu() {
 				// 先输出图片引用
 				for _, l := range imgLines {
 					fmt.Println(l)
-				}
-				// 输出回测结果框
-				if len(btBoxLines) > 0 {
-					for _, l := range btBoxLines {
-						fmt.Println(l)
-					}
 				}
 				// 用框输出正文
 				if len(textLines) > 0 {
@@ -1163,21 +1105,12 @@ func main() {
 					if r.Err != nil {
 						fmt.Println("[AI] 生成失败:", r.Err)
 					} else {
-						// 分离图片引用、回测框和正文
+						// 分离图片引用和正文
 						reportLines := strings.Split(r.Report, "\n")
-						var imgLines, btBoxLines, textLines []string
-						inBtBox := false
+						var imgLines, textLines []string
 						for _, l := range reportLines {
 							if strings.HasPrefix(l, "![图表](") {
 								imgLines = append(imgLines, l)
-							} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
-								inBtBox = true
-								btBoxLines = append(btBoxLines, l)
-							} else if inBtBox {
-								btBoxLines = append(btBoxLines, l)
-								if strings.HasPrefix(l, "└") {
-									inBtBox = false
-								}
 							} else if strings.TrimSpace(l) != "" {
 								textLines = append(textLines, l)
 							}
@@ -1185,12 +1118,6 @@ func main() {
 						// 先输出图片引用
 						for _, l := range imgLines {
 							fmt.Println(l)
-						}
-						// 输出回测结果框
-						if len(btBoxLines) > 0 {
-							for _, l := range btBoxLines {
-								fmt.Println(l)
-							}
 						}
 						// 用框输出正文
 						if len(textLines) > 0 {
@@ -1248,21 +1175,12 @@ func main() {
 			if r.Err != nil {
 				fmt.Println("[AI] 生成失败:", r.Err)
 			} else {
-				// 分离图片引用、回测框和正文
+				// 分离图片引用和正文
 				reportLines := strings.Split(r.Report, "\n")
-				var imgLines, btBoxLines, textLines []string
-				inBtBox := false
+				var imgLines, textLines []string
 				for _, l := range reportLines {
 					if strings.HasPrefix(l, "![图表](") {
 						imgLines = append(imgLines, l)
-					} else if strings.HasPrefix(l, "┌") && strings.Contains(l, "回测结果") {
-						inBtBox = true
-						btBoxLines = append(btBoxLines, l)
-					} else if inBtBox {
-						btBoxLines = append(btBoxLines, l)
-						if strings.HasPrefix(l, "└") {
-							inBtBox = false
-						}
 					} else if strings.TrimSpace(l) != "" {
 						textLines = append(textLines, l)
 					}
@@ -1270,12 +1188,6 @@ func main() {
 				// 先输出图片引用
 				for _, l := range imgLines {
 					fmt.Println(l)
-				}
-				// 输出回测结果框
-				if len(btBoxLines) > 0 {
-					for _, l := range btBoxLines {
-						fmt.Println(l)
-					}
 				}
 				// 用框输出正文
 				if len(textLines) > 0 {
