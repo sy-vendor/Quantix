@@ -194,18 +194,28 @@ func interactiveConfirm(title string, defaultValue bool) bool {
 }
 
 func promptForPredictionOptions() (periods, dims, searchScope []string, outputFormat string, needConfidence bool, riskPref string) {
-	// 预测周期多选
-	periodOptions := []string{"1天", "1周", "1月", "3月", "半年", "1年"}
+	// 预测周期多选 - 扩展更多时间维度
+	periodOptions := []string{
+		"1天", "3天", "1周", "2周", "1月", "2月", "3月", "半年", "1年", "2年", "3年",
+		"短期(1-7天)", "中期(1-3月)", "长期(3-12月)", "超长期(1年以上)",
+	}
 	defaultPeriods := []string{"1周", "1月", "3月"}
 	periods = interactiveSelectList("请选择预测周期（可多选）：", periodOptions, defaultPeriods)
 
-	// 分析维度多选
-	dimOptions := []string{"技术面", "基本面", "资金面", "行业对比", "情绪分析"}
-	defaultDims := []string{"技术面", "基本面"}
+	// 分析维度多选 - 扩展更多分析角度
+	dimOptions := []string{
+		"技术面", "基本面", "资金面", "行业对比", "情绪分析",
+		"K线形态", "均线系统", "成交量分析", "技术指标", "支撑阻力",
+		"财务数据", "盈利能力", "估值分析", "行业地位", "管理层",
+		"主力资金", "北向资金", "大宗交易", "机构持仓", "散户情绪",
+		"新闻舆情", "研报分析", "公告解读", "论坛讨论", "社交媒体",
+		"宏观经济", "政策影响", "国际环境", "产业链", "竞争格局",
+	}
+	defaultDims := []string{"技术面", "基本面", "资金面"}
 	dims = interactiveSelectList("请选择分析维度（可多选）：", dimOptions, defaultDims)
 
 	// 输出格式单选
-	outputOptions := []string{"结构化表格", "要点", "详细长文", "摘要"}
+	outputOptions := []string{"结构化表格", "要点", "详细长文", "摘要", "图表化报告", "多维度对比"}
 	outputFormat = interactiveSingleSelect("请选择输出格式：", outputOptions, outputOptions[0])
 
 	// 置信度单选
@@ -213,12 +223,12 @@ func promptForPredictionOptions() (periods, dims, searchScope []string, outputFo
 	needConfidence = interactiveSingleSelect("是否需要置信度/概率说明？", confOptions, confOptions[0]) == confOptions[0]
 
 	// 风险偏好单选
-	riskOptions := []string{"保守", "激进", "风险为主", "机会为主"}
+	riskOptions := []string{"保守", "稳健", "激进", "风险为主", "机会为主", "平衡型"}
 	riskPref = interactiveSingleSelect("请选择风险/机会偏好：", riskOptions, riskOptions[0])
 
 	// 联网搜索范围多选
-	scopeOptions := []string{"新闻", "研报", "公告", "论坛"}
-	defaultScope := []string{"新闻", "公告"}
+	scopeOptions := []string{"新闻", "研报", "公告", "论坛", "社交媒体", "政策文件", "行业报告", "专家观点"}
+	defaultScope := []string{"新闻", "公告", "研报"}
 	searchScope = interactiveSelectList("请选择联网搜索内容范围（可多选）：", scopeOptions, defaultScope)
 
 	return
@@ -329,13 +339,83 @@ func showAnalyzingAnimation(done chan struct{}) {
 
 func buildPromptWithDetail(params analysis.AnalysisParams, detail string) string {
 	basePrompt := analysis.BuildPrompt(params)
+
 	if detail == "extreme" {
-		return basePrompt + "\n请将每个分析维度细分到最小颗粒度，涵盖K线形态、均线系统、成交量、技术指标、支撑阻力、财务数据、盈利能力、估值、行业地位、管理层、分红、主力资金、北向资金、大宗交易、行业对比、情绪分析（新闻、公告、研报、论坛、社交媒体）、多周期预测（1天、1周、1月、3月），每项都要详细说明，所有结论都要有数据和理由支撑，输出结构化表格+要点+详细长文，适合专业投资者参考。"
+		return basePrompt + `
+【极致详细分析要求】
+请将每个分析维度细分到最小颗粒度，涵盖：
+
+1. 技术面深度分析：
+   - K线形态：头肩顶/底、双顶/底、三角形、旗形、楔形等
+   - 均线系统：MA5/10/20/60/120/250排列、金叉死叉、均线粘合
+   - 成交量：量价关系、放量缩量、量能背离、筹码分布
+   - 技术指标：MACD、KDJ、RSI、BOLL、CCI、OBV、DMI等
+   - 支撑阻力：历史支撑阻力位、心理价位、技术位
+
+2. 基本面深度分析：
+   - 财务数据：营收、净利润、毛利率、净利率、ROE、ROA
+   - 盈利能力：EPS、PE、PB、PS、PEG、股息率
+   - 估值分析：DCF模型、相对估值、行业对比
+   - 行业地位：市场份额、竞争优势、护城河
+   - 管理层：管理能力、战略规划、执行力
+
+3. 资金面深度分析：
+   - 主力资金：大单流入流出、机构持仓变化
+   - 北向资金：外资流入流出、持股比例
+   - 大宗交易：折溢价、交易对手、目的分析
+   - 机构持仓：基金、保险、券商持仓变化
+   - 散户情绪：融资融券、股东人数变化
+
+4. 情绪面深度分析：
+   - 新闻舆情：正面/负面新闻比例、热点事件影响
+   - 研报分析：评级变化、目标价调整、分析师观点
+   - 公告解读：重大事项、业绩预告、股权变动
+   - 论坛讨论：投资者情绪、关注度变化
+   - 社交媒体：话题热度、情感倾向
+
+5. 多周期预测：
+   - 短期(1-7天)：技术反弹、消息面影响
+   - 中期(1-3月)：趋势延续、基本面变化
+   - 长期(3-12月)：估值修复、行业周期
+   - 超长期(1年以上)：成长性、战略价值
+
+6. 风险与机会：
+   - 系统性风险：宏观经济、政策变化
+   - 个股风险：经营风险、财务风险、流动性风险
+   - 机会识别：估值修复、业绩改善、政策利好
+
+所有结论都要有数据和理由支撑，输出结构化表格+要点+详细长文，适合专业投资者参考。`
 	}
+
 	if detail == "detailed" {
-		return basePrompt + "\n请对每个分析维度进行细致展开，涵盖技术面、基本面、资金面、行业对比、情绪分析的各个子项，给出多周期预测、操作建议、风险与机会，所有结论都要有理由和数据支撑。"
+		return basePrompt + `
+【详细分析要求】
+请对每个分析维度进行细致展开，涵盖：
+
+1. 技术面分析：K线形态、均线系统、成交量、技术指标、支撑阻力
+2. 基本面分析：财务数据、盈利能力、估值分析、行业地位、管理层
+3. 资金面分析：主力资金、北向资金、大宗交易、机构持仓、散户情绪
+4. 情绪面分析：新闻舆情、研报分析、公告解读、论坛讨论、社交媒体
+5. 多周期预测：短期、中期、长期趋势预测
+6. 操作建议：买入/持有/卖出建议，仓位控制
+7. 风险与机会：主要风险点、潜在机会
+
+所有结论都要有理由和数据支撑，给出多周期预测、操作建议、风险与机会。`
 	}
-	return basePrompt
+
+	return basePrompt + `
+【标准分析要求】
+请提供以下分析：
+
+1. 技术面：K线形态、均线系统、成交量、技术指标
+2. 基本面：财务数据、盈利能力、估值分析
+3. 资金面：主力资金、北向资金、机构持仓
+4. 情绪面：新闻舆情、研报分析、公告解读
+5. 多周期预测：短期、中期、长期趋势
+6. 操作建议：买入/持有/卖出建议
+7. 风险提示：主要风险点
+
+请结合上方K线图、均线图、成交量图，对当前股票的走势、支撑阻力、均线形态、量价关系等进行详细分析，给出趋势判断、操作建议和风险提示。`
 }
 
 func getBoxWidth() int {
@@ -470,6 +550,36 @@ func aiAnalysisInteractiveMenu() {
 		fmt.Sprintf("[联网范围]: %s", strings.Join(searchScope, ", ")),
 	)
 
+	// Step 5.5: 详细预测选项
+	printStepBox("Step 5.5: Detailed Prediction Options",
+		"选择具体的预测项目和参数",
+		"说明：可多选，回车确认",
+	)
+
+	// 预测类型选择
+	predictionTypeOptions := []string{
+		"价格预测", "波动率预测", "成交量预测", "涨跌概率预测",
+		"技术指标预测", "基本面指标预测", "情绪评分预测",
+		"市场定位预测", "竞争优势预测", "风险等级预测",
+	}
+	defaultPredictionTypes := []string{"价格预测", "涨跌概率预测", "风险等级预测"}
+	predictionTypes := interactiveSelectList("请选择预测类型（可多选）：", predictionTypeOptions, defaultPredictionTypes)
+
+	// 具体预测项目选择
+	predictionItemOptions := []string{
+		"目标价位预测", "止损位预测", "止盈位预测", "波动率预测",
+		"成交量预测", "涨跌概率预测", "风险等级预测", "趋势强度预测",
+		"支撑阻力位预测", "技术信号预测", "基本面指标预测", "情绪评分预测",
+		"市场定位分析", "竞争优势分析",
+	}
+	defaultPredictionItems := []string{"目标价位预测", "止损位预测", "止盈位预测", "涨跌概率预测"}
+	predictionItems := interactiveSelectList("请选择具体预测项目（可多选）：", predictionItemOptions, defaultPredictionItems)
+
+	printStepBox("Step 5.5: Detailed Prediction Options",
+		fmt.Sprintf("[预测类型]: %s", strings.Join(predictionTypes, ", ")),
+		fmt.Sprintf("[预测项目]: %s", strings.Join(predictionItems, ", ")),
+	)
+
 	// Step 6: 语言选择
 	printStepBox("Step 6: Language",
 		"Select analysis language",
@@ -572,18 +682,33 @@ func aiAnalysisInteractiveMenu() {
 	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
 
 	params := analysis.AnalysisParams{
-		APIKey:     apiKey,
-		Model:      model,
-		StockCodes: stockCodes,
-		Start:      start,
-		End:        end,
-		Periods:    periods,
-		Dims:       dims,
-		Output:     exportFormats,
-		Confidence: needConfidence,
-		Risk:       riskPref,
-		Scope:      searchScope,
-		Lang:       lang,
+		APIKey:               apiKey,
+		Model:                model,
+		StockCodes:           stockCodes,
+		Start:                start,
+		End:                  end,
+		Periods:              periods,
+		Dims:                 dims,
+		Output:               exportFormats,
+		Confidence:           needConfidence,
+		Risk:                 riskPref,
+		Scope:                searchScope,
+		Lang:                 lang,
+		PredictionTypes:      predictionTypes,
+		TargetPrice:          contains(predictionItems, "目标价位预测"),
+		StopLoss:             contains(predictionItems, "止损位预测"),
+		TakeProfit:           contains(predictionItems, "止盈位预测"),
+		Volatility:           contains(predictionItems, "波动率预测"),
+		Volume:               contains(predictionItems, "成交量预测"),
+		Probability:          contains(predictionItems, "涨跌概率预测"),
+		RiskLevel:            contains(predictionItems, "风险等级预测"),
+		TrendStrength:        contains(predictionItems, "趋势强度预测"),
+		SupportResistance:    contains(predictionItems, "支撑阻力位预测"),
+		TechnicalSignals:     contains(predictionItems, "技术信号预测"),
+		FundamentalMetrics:   contains(predictionItems, "基本面指标预测"),
+		SentimentScore:       contains(predictionItems, "情绪评分预测"),
+		MarketPosition:       contains(predictionItems, "市场定位分析"),
+		CompetitiveAdvantage: contains(predictionItems, "竞争优势分析"),
 	}
 
 	fmt.Println("\n=== 开始AI智能分析 ===")
@@ -787,6 +912,36 @@ func aiScheduleInteractiveMenu() {
 		fmt.Sprintf("[联网范围]: %s", strings.Join(searchScope, ", ")),
 	)
 
+	// Step 5.5: 详细预测选项
+	printStepBox("Step 5.5: Detailed Prediction Options",
+		"选择具体的预测项目和参数",
+		"说明：可多选，回车确认",
+	)
+
+	// 预测类型选择
+	predictionTypeOptions := []string{
+		"价格预测", "波动率预测", "成交量预测", "涨跌概率预测",
+		"技术指标预测", "基本面指标预测", "情绪评分预测",
+		"市场定位预测", "竞争优势预测", "风险等级预测",
+	}
+	defaultPredictionTypes := []string{"价格预测", "涨跌概率预测", "风险等级预测"}
+	predictionTypes := interactiveSelectList("请选择预测类型（可多选）：", predictionTypeOptions, defaultPredictionTypes)
+
+	// 具体预测项目选择
+	predictionItemOptions := []string{
+		"目标价位预测", "止损位预测", "止盈位预测", "波动率预测",
+		"成交量预测", "涨跌概率预测", "风险等级预测", "趋势强度预测",
+		"支撑阻力位预测", "技术信号预测", "基本面指标预测", "情绪评分预测",
+		"市场定位分析", "竞争优势分析",
+	}
+	defaultPredictionItems := []string{"目标价位预测", "止损位预测", "止盈位预测", "涨跌概率预测"}
+	predictionItems := interactiveSelectList("请选择具体预测项目（可多选）：", predictionItemOptions, defaultPredictionItems)
+
+	printStepBox("Step 5.5: Detailed Prediction Options",
+		fmt.Sprintf("[预测类型]: %s", strings.Join(predictionTypes, ", ")),
+		fmt.Sprintf("[预测项目]: %s", strings.Join(predictionItems, ", ")),
+	)
+
 	// Step 6: 语言选择
 	printStepBox("Step 6: Language",
 		"Select analysis language",
@@ -902,18 +1057,33 @@ func aiScheduleInteractiveMenu() {
 	printStepBox("Step 12: Schedule", fmt.Sprintf("[当前周期]: %s", schedule))
 
 	params := analysis.AnalysisParams{
-		APIKey:     apiKey,
-		Model:      model,
-		StockCodes: stockCodes,
-		Start:      start,
-		End:        end,
-		Periods:    periods,
-		Dims:       dims,
-		Output:     exportFormats,
-		Confidence: needConfidence,
-		Risk:       riskPref,
-		Scope:      searchScope,
-		Lang:       lang,
+		APIKey:               apiKey,
+		Model:                model,
+		StockCodes:           stockCodes,
+		Start:                start,
+		End:                  end,
+		Periods:              periods,
+		Dims:                 dims,
+		Output:               exportFormats,
+		Confidence:           needConfidence,
+		Risk:                 riskPref,
+		Scope:                searchScope,
+		Lang:                 lang,
+		PredictionTypes:      predictionTypes,
+		TargetPrice:          contains(predictionItems, "目标价位预测"),
+		StopLoss:             contains(predictionItems, "止损位预测"),
+		TakeProfit:           contains(predictionItems, "止盈位预测"),
+		Volatility:           contains(predictionItems, "波动率预测"),
+		Volume:               contains(predictionItems, "成交量预测"),
+		Probability:          contains(predictionItems, "涨跌概率预测"),
+		RiskLevel:            contains(predictionItems, "风险等级预测"),
+		TrendStrength:        contains(predictionItems, "趋势强度预测"),
+		SupportResistance:    contains(predictionItems, "支撑阻力位预测"),
+		TechnicalSignals:     contains(predictionItems, "技术信号预测"),
+		FundamentalMetrics:   contains(predictionItems, "基本面指标预测"),
+		SentimentScore:       contains(predictionItems, "情绪评分预测"),
+		MarketPosition:       contains(predictionItems, "市场定位分析"),
+		CompetitiveAdvantage: contains(predictionItems, "竞争优势分析"),
 	}
 
 	fmt.Println("\n=== 定时任务已启动，Ctrl+C 可随时终止 ===")
@@ -1220,4 +1390,14 @@ func main() {
 	}
 	// 否则进入主菜单循环
 	mainMenu()
+}
+
+// contains 检查字符串数组中是否包含指定字符串
+func contains(arr []string, item string) bool {
+	for _, i := range arr {
+		if i == item {
+			return true
+		}
+	}
+	return false
 }

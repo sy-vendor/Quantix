@@ -3,6 +3,7 @@ package analysis
 import (
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,23 @@ type AnalysisParams struct {
 	Scope        []string
 	Lang         string
 	Prompt       string // 可选，手动传递prompt
+
+	// 新增：扩展预测参数
+	PredictionTypes      []string // 预测类型：价格、波动率、成交量、涨跌概率等
+	TargetPrice          bool     // 是否预测目标价位
+	StopLoss             bool     // 是否预测止损位
+	TakeProfit           bool     // 是否预测止盈位
+	Volatility           bool     // 是否预测波动率
+	Volume               bool     // 是否预测成交量
+	Probability          bool     // 是否预测涨跌概率
+	RiskLevel            bool     // 是否预测风险等级
+	TrendStrength        bool     // 是否预测趋势强度
+	SupportResistance    bool     // 是否预测支撑阻力位
+	TechnicalSignals     bool     // 是否预测技术信号
+	FundamentalMetrics   bool     // 是否预测基本面指标
+	SentimentScore       bool     // 是否预测情绪评分
+	MarketPosition       bool     // 是否预测市场定位
+	CompetitiveAdvantage bool     // 是否预测竞争优势
 }
 
 type AnalysisResult struct {
@@ -68,6 +86,41 @@ type TechnicalIndicator struct {
 	MA10 float64
 	MA20 float64
 	MA60 float64
+
+	// 新增：更多技术指标
+	MA120 float64 // 120日均线
+	MA250 float64 // 250日均线
+
+	// MACD指标
+	MACD          float64 // MACD线
+	MACDSignal    float64 // MACD信号线
+	MACDHistogram float64 // MACD柱状图
+
+	// KDJ指标
+	K float64 // K值
+	D float64 // D值
+	J float64 // J值
+
+	// RSI指标
+	RSI6  float64 // 6日RSI
+	RSI12 float64 // 12日RSI
+	RSI24 float64 // 24日RSI
+
+	// BOLL指标
+	BOLLUpper  float64 // 布林带上轨
+	BOLLMiddle float64 // 布林带中轨
+	BOLLLower  float64 // 布林带下轨
+
+	// 成交量指标
+	VolumeMA5  float64 // 5日成交量均线
+	VolumeMA10 float64 // 10日成交量均线
+	VolumeMA20 float64 // 20日成交量均线
+
+	// 其他技术指标
+	CCI       float64 // 顺势指标
+	OBV       float64 // 能量潮指标
+	ATR       float64 // 真实波幅
+	WilliamsR float64 // 威廉指标
 }
 
 // 函数声明补充
@@ -124,7 +177,7 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 			closes = append(closes, close)
 		}
 	}
-	// 本地计算MA5/10/20/60
+	// 本地计算技术指标
 	ma := func(arr []float64, n int, idx int) float64 {
 		if idx+1 < n {
 			return 0
@@ -135,13 +188,141 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 		}
 		return sum / float64(n)
 	}
+
+	// 计算MACD
+	calcMACD := func(prices []float64, idx int) (float64, float64, float64) {
+		if idx < 25 {
+			return 0, 0, 0
+		}
+		ema12 := 0.0
+		ema26 := 0.0
+		alpha12 := 2.0 / 13.0
+		alpha26 := 2.0 / 27.0
+
+		for i := 0; i <= idx; i++ {
+			if i == 0 {
+				ema12 = prices[i]
+				ema26 = prices[i]
+			} else {
+				ema12 = alpha12*prices[i] + (1-alpha12)*ema12
+				ema26 = alpha26*prices[i] + (1-alpha26)*ema26
+			}
+		}
+
+		macd := ema12 - ema26
+		signal := 0.0
+		histogram := macd - signal
+
+		return macd, signal, histogram
+	}
+
+	// 计算RSI
+	calcRSI := func(prices []float64, period int, idx int) float64 {
+		if idx < period {
+			return 0
+		}
+		gains := 0.0
+		losses := 0.0
+		for i := idx - period + 1; i <= idx; i++ {
+			if i > 0 {
+				change := prices[i] - prices[i-1]
+				if change > 0 {
+					gains += change
+				} else {
+					losses -= change
+				}
+			}
+		}
+		avgGain := gains / float64(period)
+		avgLoss := losses / float64(period)
+		if avgLoss == 0 {
+			return 100
+		}
+		rs := avgGain / avgLoss
+		return 100 - (100 / (1 + rs))
+	}
+
+	// 计算BOLL
+	calcBOLL := func(prices []float64, period int, idx int) (float64, float64, float64) {
+		if idx < period-1 {
+			return 0, 0, 0
+		}
+		sum := 0.0
+		for i := idx - period + 1; i <= idx; i++ {
+			sum += prices[i]
+		}
+		middle := sum / float64(period)
+
+		variance := 0.0
+		for i := idx - period + 1; i <= idx; i++ {
+			variance += (prices[i] - middle) * (prices[i] - middle)
+		}
+		stdDev := math.Sqrt(variance / float64(period))
+
+		upper := middle + 2*stdDev
+		lower := middle - 2*stdDev
+
+		return upper, middle, lower
+	}
+
+	// 计算成交量均线
+	calcVolumeMA := func(volumes []float64, n int, idx int) float64 {
+		if idx+1 < n {
+			return 0
+		}
+		sum := 0.0
+		for i := idx + 1 - n; i <= idx; i++ {
+			sum += volumes[i]
+		}
+		return sum / float64(n)
+	}
+
 	var indicators []TechnicalIndicator
+	var volumes []float64
+	for _, d := range stockData {
+		volumes = append(volumes, d.Volume)
+	}
+
 	for i := range stockData {
+		// 计算MACD
+		macd, signal, histogram := calcMACD(closes, i)
+
+		// 计算RSI
+		rsi6 := calcRSI(closes, 6, i)
+		rsi12 := calcRSI(closes, 12, i)
+		rsi24 := calcRSI(closes, 24, i)
+
+		// 计算BOLL
+		bollUpper, bollMiddle, bollLower := calcBOLL(closes, 20, i)
+
+		// 计算成交量均线
+		volMA5 := calcVolumeMA(volumes, 5, i)
+		volMA10 := calcVolumeMA(volumes, 10, i)
+		volMA20 := calcVolumeMA(volumes, 20, i)
+
 		indicators = append(indicators, TechnicalIndicator{
-			MA5:  ma(closes, 5, i),
-			MA10: ma(closes, 10, i),
-			MA20: ma(closes, 20, i),
-			MA60: ma(closes, 60, i),
+			MA5:   ma(closes, 5, i),
+			MA10:  ma(closes, 10, i),
+			MA20:  ma(closes, 20, i),
+			MA60:  ma(closes, 60, i),
+			MA120: ma(closes, 120, i),
+			MA250: ma(closes, 250, i),
+
+			MACD:          macd,
+			MACDSignal:    signal,
+			MACDHistogram: histogram,
+
+			RSI6:  rsi6,
+			RSI12: rsi12,
+			RSI24: rsi24,
+
+			BOLLUpper:  bollUpper,
+			BOLLMiddle: bollMiddle,
+			BOLLLower:  bollLower,
+
+			VolumeMA5:  volMA5,
+			VolumeMA10: volMA10,
+			VolumeMA20: volMA20,
 		})
 	}
 	return stockData, indicators, nil
@@ -151,19 +332,92 @@ func BuildPrompt(params AnalysisParams) string {
 	// 构建分析提示词
 	prompt := fmt.Sprintf("请对股票代码 %s 进行智能分析。\n", strings.Join(params.StockCodes, ","))
 	prompt += fmt.Sprintf("分析时间范围：%s 至 %s\n", params.Start, params.End)
+
+	// 预测周期
 	if len(params.Periods) > 0 {
 		prompt += fmt.Sprintf("预测周期：%s\n", strings.Join(params.Periods, "、"))
 	}
+
+	// 分析维度
 	if len(params.Dims) > 0 {
 		prompt += fmt.Sprintf("分析维度：%s\n", strings.Join(params.Dims, "、"))
 	}
+
+	// 风险偏好
 	if params.Risk != "" {
 		prompt += fmt.Sprintf("风险偏好：%s\n", params.Risk)
 	}
+
+	// 输出语言
 	if params.Lang != "" {
 		prompt += fmt.Sprintf("输出语言：%s\n", params.Lang)
 	}
-	prompt += "\n请提供详细的技术分析和投资建议。"
+
+	// 新增：详细预测要求
+	prompt += "\n【预测要求】\n"
+
+	// 预测类型
+	if len(params.PredictionTypes) > 0 {
+		prompt += fmt.Sprintf("预测类型：%s\n", strings.Join(params.PredictionTypes, "、"))
+	}
+
+	// 具体预测项目
+	var predictions []string
+	if params.TargetPrice {
+		predictions = append(predictions, "目标价位预测")
+	}
+	if params.StopLoss {
+		predictions = append(predictions, "止损位预测")
+	}
+	if params.TakeProfit {
+		predictions = append(predictions, "止盈位预测")
+	}
+	if params.Volatility {
+		predictions = append(predictions, "波动率预测")
+	}
+	if params.Volume {
+		predictions = append(predictions, "成交量预测")
+	}
+	if params.Probability {
+		predictions = append(predictions, "涨跌概率预测")
+	}
+	if params.RiskLevel {
+		predictions = append(predictions, "风险等级评估")
+	}
+	if params.TrendStrength {
+		predictions = append(predictions, "趋势强度预测")
+	}
+	if params.SupportResistance {
+		predictions = append(predictions, "支撑阻力位预测")
+	}
+	if params.TechnicalSignals {
+		predictions = append(predictions, "技术信号预测")
+	}
+	if params.FundamentalMetrics {
+		predictions = append(predictions, "基本面指标预测")
+	}
+	if params.SentimentScore {
+		predictions = append(predictions, "情绪评分预测")
+	}
+	if params.MarketPosition {
+		predictions = append(predictions, "市场定位分析")
+	}
+	if params.CompetitiveAdvantage {
+		predictions = append(predictions, "竞争优势分析")
+	}
+
+	if len(predictions) > 0 {
+		prompt += fmt.Sprintf("具体预测项目：%s\n", strings.Join(predictions, "、"))
+	}
+
+	// 置信度要求
+	if params.Confidence {
+		prompt += "每个预测结论都需要提供置信度/概率区间\n"
+	}
+
+	prompt += "\n请提供详细的技术分析和投资建议，包含上述所有预测项目。"
+	// 新增：统一要求用markdown表格输出多周期预测和综合预测结论
+	prompt += "\n\n【格式要求】\n1. 多周期预测请用markdown表格输出，表头包含：周期、趋势判断、关键价位、置信度。\n2. 综合预测结论请用markdown表格输出，表头包含：预测项目、预测值/区间、置信度。\n3. 结论部分也请用表格和要点形式输出，便于阅读。"
 	return prompt
 }
 
@@ -193,15 +447,18 @@ func FormatStockDataTable(stockData []StockData, indicators []TechnicalIndicator
 	if len(stockData) == 0 {
 		return ""
 	}
-	head := "\n【历史行情数据表】\n| 日期 | 开盘 | 收盘 | 最高 | 最低 | 成交量 | MA5 | MA10 | MA20 | MA60 |\n|------|------|------|------|------|--------|-----|------|------|------|\n"
+	head := "\n【历史行情数据表】\n| 日期 | 开盘 | 收盘 | 最高 | 最低 | 成交量 | MA5 | MA10 | MA20 | MA60 | MA120 | MA250 | MACD | RSI6 | RSI12 | BOLL上轨 | BOLL中轨 | BOLL下轨 |\n|------|------|------|------|------|--------|-----|------|------|------|-------|-------|------|------|-------|----------|----------|----------|\n"
 	rows := ""
 	for i, d := range stockData {
 		if i >= len(indicators) {
 			break
 		}
-		row := fmt.Sprintf("| %s | %.2f | %.2f | %.2f | %.2f | %.0f | %.2f | %.2f | %.2f | %.2f |\n",
+		row := fmt.Sprintf("| %s | %.2f | %.2f | %.2f | %.2f | %.0f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.3f | %.1f | %.1f | %.2f | %.2f | %.2f |\n",
 			d.Date.Format("2006-01-02"), d.Open, d.Close, d.High, d.Low, d.Volume,
-			indicators[i].MA5, indicators[i].MA10, indicators[i].MA20, indicators[i].MA60)
+			indicators[i].MA5, indicators[i].MA10, indicators[i].MA20, indicators[i].MA60,
+			indicators[i].MA120, indicators[i].MA250, indicators[i].MACD,
+			indicators[i].RSI6, indicators[i].RSI12,
+			indicators[i].BOLLUpper, indicators[i].BOLLMiddle, indicators[i].BOLLLower)
 		rows += row
 		if i > 30 {
 			break
