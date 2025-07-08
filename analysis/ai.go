@@ -329,39 +329,31 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 }
 
 func BuildPrompt(params AnalysisParams) string {
-	// 构建分析提示词
-	prompt := fmt.Sprintf("请对股票代码 %s 进行智能分析。\n", strings.Join(params.StockCodes, ","))
+	// 判断是否联网/混合模式
+	isOnline := params.SearchMode || params.HybridSearch
+	prompt := ""
+	if isOnline {
+		prompt += fmt.Sprintf("请联网获取股票%s的最新股价、最新公告和新闻，分析时以最新联网数据为准。如本地数据与最新行情不符，请以联网数据为主，并在报告开头注明最新股价和日期。\n", strings.Join(params.StockCodes, ","))
+	} else {
+		prompt += fmt.Sprintf("请对股票代码 %s 进行智能分析。\n", strings.Join(params.StockCodes, ","))
+	}
 	prompt += fmt.Sprintf("分析时间范围：%s 至 %s\n", params.Start, params.End)
-
-	// 预测周期
 	if len(params.Periods) > 0 {
 		prompt += fmt.Sprintf("预测周期：%s\n", strings.Join(params.Periods, "、"))
 	}
-
-	// 分析维度
 	if len(params.Dims) > 0 {
 		prompt += fmt.Sprintf("分析维度：%s\n", strings.Join(params.Dims, "、"))
 	}
-
-	// 风险偏好
 	if params.Risk != "" {
 		prompt += fmt.Sprintf("风险偏好：%s\n", params.Risk)
 	}
-
-	// 输出语言
 	if params.Lang != "" {
 		prompt += fmt.Sprintf("输出语言：%s\n", params.Lang)
 	}
-
-	// 新增：详细预测要求
 	prompt += "\n【预测要求】\n"
-
-	// 预测类型
 	if len(params.PredictionTypes) > 0 {
 		prompt += fmt.Sprintf("预测类型：%s\n", strings.Join(params.PredictionTypes, "、"))
 	}
-
-	// 具体预测项目
 	var predictions []string
 	if params.TargetPrice {
 		predictions = append(predictions, "目标价位预测")
@@ -405,19 +397,14 @@ func BuildPrompt(params AnalysisParams) string {
 	if params.CompetitiveAdvantage {
 		predictions = append(predictions, "竞争优势分析")
 	}
-
 	if len(predictions) > 0 {
 		prompt += fmt.Sprintf("具体预测项目：%s\n", strings.Join(predictions, "、"))
 	}
-
-	// 置信度要求
 	if params.Confidence {
 		prompt += "每个预测结论都需要提供置信度/概率区间\n"
 	}
-
 	prompt += "\n请提供详细的技术分析和投资建议，包含上述所有预测项目。"
-	// 新增：统一要求用markdown表格输出多周期预测和综合预测结论
-	prompt += "\n\n【格式要求】\n1. 多周期预测请用markdown表格输出，表头包含：周期、趋势判断、关键价位、置信度。\n2. 综合预测结论请用markdown表格输出，表头包含：预测项目、预测值/区间、置信度。\n3. 结论部分也请用表格和要点形式输出，便于阅读。"
+	prompt += "\n\n【格式要求】\n1. 多周期预测请用markdown表格输出，表头包含：周期、趋势判断、关键价位、置信度、主要驱动因素/理由。\n2. 综合预测结论请用markdown表格输出，表头包含：预测项目、预测值/区间、置信度、主要驱动因素/理由。\n3. 若某项预测不适用或数据不足，请在表格中注明‘数据不足’或‘-’。\n4. 结论部分请分为‘主要结论’、‘风险提示’、‘操作建议’三块，分别用表格或要点输出。"
 	return prompt
 }
 
