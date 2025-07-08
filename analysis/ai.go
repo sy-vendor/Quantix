@@ -17,6 +17,8 @@ import (
 
 	"regexp"
 
+	"encoding/csv"
+
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/mattn/go-runewidth"
@@ -493,7 +495,6 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 	stockData, indicators, _ := FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
 	if len(stockData) > 0 {
 		latest := stockData[len(stockData)-1].Date
-		// fmt.Fprintf(os.Stderr, "[调试] 实际可用K线最新日期: %s\n", latest.Format("2006-01-02"))
 		stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
 	}
 	chartPaths, _ := GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
@@ -516,6 +517,9 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 
 	// 自动修复：确保history目录存在
 	os.MkdirAll("history", 0755)
+
+	// 新增：结构化保存预测结果
+	savePredictionTablesToCSV(params.StockCodes[0], params.End, report)
 
 	// 支持多格式导出
 	exports := []string{"md"} // 默认md
@@ -572,6 +576,37 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: savedFile, Err: writeErr}
 	}
 	return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: savedFile}
+}
+
+// savePredictionTablesToCSV 解析AI报告中的表格并保存到CSV
+func savePredictionTablesToCSV(stockCode, endDate, report string) {
+	csvPath := "history/predictions.csv"
+	f, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 无法打开CSV: %v\n", err)
+		return
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	defer w.Flush()
+
+	// 简单正则提取markdown表格
+	tableRe := regexp.MustCompile(`(?ms)\|[ \t]*周期[ \t]*\|[\s\S]+?\|[ \t]*\|[ \t]*$`)
+	tables := tableRe.FindAllString(report, -1)
+	for _, table := range tables {
+		lines := strings.Split(table, "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "|") && !strings.Contains(line, "周期") && !strings.Contains(line, "---") {
+				fields := strings.Split(line, "|")
+				for i := range fields {
+					fields[i] = strings.TrimSpace(fields[i])
+				}
+				// 追加股票代码、预测日期
+				row := append([]string{stockCode, endDate}, fields[1:len(fields)-1]...)
+				w.Write(row)
+			}
+		}
+	}
 }
 
 // printStepBoxStr 返回美观的框包裹字符串（不直接输出）

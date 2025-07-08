@@ -3,6 +3,7 @@ package main
 import (
 	"Quantix/analysis"
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -1193,8 +1194,13 @@ func main() {
 	smtpPassFlag := flag.String("smtp-pass", "", "SMTP密码")
 	webhookFlag := flag.String("webhook", "", "IM webhook地址")
 	detailFlag := flag.String("detail", "normal", "分析详细程度 normal/detailed/extreme")
+	updateActualFlag := flag.Bool("update-actual", false, "批量补全预测的实际行情（T+1、T+5、T+20）")
 	flag.Parse()
 
+	if *updateActualFlag {
+		updateActualPricesWithDeepSeek()
+		return
+	}
 	if *historyFlag {
 		analysis.ListHistoryFiles()
 		return
@@ -1400,4 +1406,233 @@ func contains(arr []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// updateActualPricesWithDeepSeek 遍历predictions.csv，调用DeepSeek联网补全实际收盘价
+func updateActualPricesWithDeepSeek() {
+	fmt.Println("[预测追踪] 开始批量补全实际行情...")
+
+	// 获取 API Key 和模型
+	apiKey := promptForAPIKey()
+	if apiKey == "" {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 需要 DeepSeek API Key\n")
+		return
+	}
+
+	// 获取可用模型
+	models, err := fetchDeepSeekModels(apiKey, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 获取模型失败: %v\n", err)
+		return
+	}
+
+	deepseekModels := make([]string, 0)
+	for _, m := range models {
+		if strings.Contains(m, "deepseek") {
+			deepseekModels = append(deepseekModels, m)
+		}
+	}
+
+	if len(deepseekModels) == 0 {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 未找到可用的 DeepSeek 模型\n")
+		return
+	}
+
+	model := promptForModel(deepseekModels)
+	if model == "" {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 需要选择 DeepSeek 模型\n")
+		return
+	}
+
+	csvPath := "history/predictions.csv"
+	f, err := os.Open(csvPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 无法打开CSV: %v\n", err)
+		return
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	records, err := reader.ReadAll()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[预测追踪] 读取CSV失败: %v\n", err)
+		return
+	}
+
+	if len(records) == 0 {
+		fmt.Println("[预测追踪] CSV为空，无需补全。")
+		return
+	}
+
+	// 检查是否有实际价格列，如果没有则添加
+	headers := records[0]
+	hasActualCols := false
+	for _, h := range headers {
+		if strings.Contains(h, "实际") {
+			hasActualCols = true
+			break
+		}
+	}
+
+	if !hasActualCols {
+		// 添加实际价格列
+		headers = append(headers, "T+1实际收盘价", "T+5实际收盘价", "T+20实际收盘价")
+		records[0] = headers
+	}
+
+	// 找到实际价格列的索引
+	t1Idx := -1
+	t5Idx := -1
+	t20Idx := -1
+	for i, h := range headers {
+		if h == "T+1实际收盘价" {
+			t1Idx = i
+		} else if h == "T+5实际收盘价" {
+			t5Idx = i
+		} else if h == "T+20实际收盘价" {
+			t20Idx = i
+		}
+	}
+
+	// 处理每一行预测记录
+	updated := false
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		stock := row[0]
+		predDate := row[1]
+
+		// 检查是否已经有实际价格
+		if t1Idx < len(row) && t5Idx < len(row) && t20Idx < len(row) {
+			if row[t1Idx] != "" && row[t5Idx] != "" && row[t20Idx] != "" {
+				continue // 已有实际价格，跳过
+			}
+		}
+
+		// 计算目标日期
+		layout := "2006-01-02"
+		base, err := time.Parse(layout, predDate)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[预测追踪] 解析日期失败 %s: %v\n", predDate, err)
+			continue
+		}
+
+		dates := []time.Time{
+			base.AddDate(0, 0, 1),
+			base.AddDate(0, 0, 5),
+			base.AddDate(0, 0, 20),
+		}
+
+		// 生成查询 prompt
+		dateStrs := make([]string, len(dates))
+		for j, d := range dates {
+			dateStrs[j] = d.Format(layout)
+		}
+
+		prompt := fmt.Sprintf(`请联网查询股票%s在%s的收盘价，并严格按照以下markdown表格格式输出：
+
+| 日期 | 收盘价 |
+|------|--------|
+| %s |        |
+| %s |        |
+| %s |        |
+
+请确保：
+1. 联网查询最新准确的收盘价数据
+2. 严格按照表格格式输出，不要添加其他内容
+3. 如果某个日期是周末或节假日，请标注"休市"`,
+			stock, strings.Join(dateStrs, "、"), dateStrs[0], dateStrs[1], dateStrs[2])
+
+		fmt.Printf("[预测追踪] 查询 %s %s 的实际收盘价...\n", stock, predDate)
+
+		// 调用 DeepSeek API
+		result, err := analysis.GenerateAIReportWithConfigAndSearch(
+			stock, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions",
+			model, true, true) // 启用联网搜索
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[预测追踪] 查询失败 %s %s: %v\n", stock, predDate, err)
+			continue
+		}
+
+		// 解析表格结果
+		prices := parseActualPricesFromTable(result)
+		if len(prices) == 3 {
+			// 确保行有足够的列
+			for len(row) <= t20Idx {
+				row = append(row, "")
+			}
+
+			// 更新实际价格
+			if t1Idx >= 0 && t1Idx < len(row) {
+				row[t1Idx] = prices[0]
+			}
+			if t5Idx >= 0 && t5Idx < len(row) {
+				row[t5Idx] = prices[1]
+			}
+			if t20Idx >= 0 && t20Idx < len(row) {
+				row[t20Idx] = prices[2]
+			}
+
+			records[i] = row
+			updated = true
+			fmt.Printf("[预测追踪] ✓ %s %s: T+1=%s, T+5=%s, T+20=%s\n",
+				stock, predDate, prices[0], prices[1], prices[2])
+		} else {
+			fmt.Fprintf(os.Stderr, "[预测追踪] 解析失败 %s %s: 期望3个价格，实际%d个\n",
+				stock, predDate, len(prices))
+		}
+
+		// 避免 API 调用过于频繁
+		time.Sleep(1 * time.Second)
+	}
+
+	// 写回 CSV
+	if updated {
+		f.Close()
+		f, err = os.Create(csvPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[预测追踪] 无法创建CSV: %v\n", err)
+			return
+		}
+		defer f.Close()
+
+		writer := csv.NewWriter(f)
+		defer writer.Flush()
+
+		for _, record := range records {
+			writer.Write(record)
+		}
+
+		fmt.Printf("[预测追踪] ✓ 已更新 %d 条预测记录的实际价格\n", len(records)-1)
+	} else {
+		fmt.Println("[预测追踪] 所有记录都已包含实际价格，无需更新")
+	}
+}
+
+// parseActualPricesFromTable 从 AI 返回的 markdown 表格中解析实际价格
+func parseActualPricesFromTable(result string) []string {
+	prices := make([]string, 0)
+
+	// 查找表格行
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "|") && strings.Contains(line, "|") {
+			// 跳过表头和分隔线
+			if strings.Contains(line, "日期") || strings.Contains(line, "---") {
+				continue
+			}
+
+			// 解析表格行
+			parts := strings.Split(line, "|")
+			if len(parts) >= 3 {
+				price := strings.TrimSpace(parts[2])
+				if price != "" && price != "收盘价" {
+					prices = append(prices, price)
+				}
+			}
+		}
+	}
+
+	return prices
 }
