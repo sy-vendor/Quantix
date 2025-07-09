@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/AlecAivazis/survey/v2/core"
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 )
@@ -102,14 +104,29 @@ func promptForSearchMode() bool {
 // survey多选
 func interactiveSelectList(title string, options []string, defaultSelected []string) []string {
 	var result []string
+	compat := "\033[33m[兼容性提示] 如无法选择请用本地原生终端（如 macOS Terminal/iTerm2/Windows Terminal），避免VSCode嵌入终端或远程SSH窗口。\033[0m"
 	prompt := &survey.MultiSelect{
-		Message: title,
+		Message: title + "\n" + compat + "\n操作说明：↑↓箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认",
 		Options: options,
 		Default: defaultSelected,
-		Help:    "操作说明：↑↓箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认",
+		Help:    "操作说明：↑↓箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认。\n" + compat,
 	}
 
 	err := survey.AskOne(prompt, &result,
+		// 自定义校验器，提示中文
+		survey.WithValidator(func(ans interface{}) error {
+			if arr, ok := ans.([]core.OptionAnswer); ok {
+				if len(arr) == 0 {
+					return errors.New("请至少选择一项")
+				}
+			}
+			if arr, ok := ans.([]string); ok {
+				if len(arr) == 0 {
+					return errors.New("请至少选择一项")
+				}
+			}
+			return nil
+		}),
 		survey.WithHelpInput('?'),
 		survey.WithIcons(func(icons *survey.IconSet) {
 			icons.SelectFocus.Text = ">"
@@ -213,7 +230,10 @@ func promptForPredictionOptions() (periods, dims, searchScope []string, outputFo
 		"宏观经济", "政策影响", "国际环境", "产业链", "竞争格局",
 	}
 	defaultDims := []string{"技术面", "基本面", "资金面"}
+	fmt.Println("dimOptions:", dimOptions)
+	fmt.Println("defaultDims:", defaultDims)
 	dims = interactiveSelectList("请选择分析维度（可多选）：", dimOptions, defaultDims)
+	fmt.Println("dims 结果：", dims)
 
 	// 输出格式单选
 	outputOptions := []string{"结构化表格", "要点", "详细长文", "摘要", "图表化报告", "多维度对比"}
@@ -1140,6 +1160,9 @@ func aiScheduleInteractiveMenu() {
 }
 
 func main() {
+	survey.ErrorTemplate = `
+{{- color "red"}}提示：{{.Error.Error}}{{color "reset"}}
+`
 	survey.MultiSelectQuestionTemplate = `
 {{- define "option"}}
     {{- if eq $.SelectedIndex $.CurrentIndex }}{{color "cyan"}}> {{if index $.Checked $.CurrentOpt.Index }}[✓]{{else}}[ ]{{end}} {{$.CurrentOpt.Value}}{{color "reset"}}{{else}}  {{if index $.Checked $.CurrentOpt.Index }}[✓]{{else}}[ ]{{end}} {{$.CurrentOpt.Value}}{{end}}
