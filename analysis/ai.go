@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -127,6 +128,50 @@ type TechnicalIndicator struct {
 
 // 函数声明补充
 func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []TechnicalIndicator, error) {
+	// 尝试多个数据源，确保数据准确性
+	var stockData []StockData
+	var err error
+
+	// 数据源优先级：1. 腾讯API 2. 网易API 3. 雪球API
+	dataSources := []struct {
+		name string
+		fn   func(string) ([]StockData, error)
+	}{
+		{"腾讯API", fetchFromTencent},
+		{"网易API", fetchFromNetEase},
+		{"雪球API", fetchFromXueqiu},
+	}
+
+	for _, source := range dataSources {
+		fmt.Printf("[数据源] 尝试从 %s 获取 %s 的历史数据...\n", source.name, stockCode)
+		stockData, err = source.fn(stockCode)
+		if err == nil && len(stockData) > 0 {
+			fmt.Printf("[数据源] ✓ 成功从 %s 获取 %d 条数据\n", source.name, len(stockData))
+			break
+		}
+		fmt.Printf("[数据源] ✗ %s 获取失败: %v\n", source.name, err)
+	}
+
+	if len(stockData) == 0 {
+		return nil, nil, fmt.Errorf("所有数据源都获取失败")
+	}
+
+	// 数据验证：检查价格合理性
+	stockData = validateAndFilterData(stockData, stockCode)
+
+	// 按日期排序
+	sort.Slice(stockData, func(i, j int) bool {
+		return stockData[i].Date.Before(stockData[j].Date)
+	})
+
+	// 计算技术指标
+	indicators := calculateTechnicalIndicators(stockData)
+
+	return stockData, indicators, nil
+}
+
+// 腾讯API数据源
+func fetchFromTencent(stockCode string) ([]StockData, error) {
 	// 腾讯API symbol格式：sh600036、sz000001
 	symbol := stockCode
 	if len(stockCode) == 6 && stockCode[0] == '6' {
@@ -134,15 +179,17 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 	} else if len(stockCode) == 6 && (stockCode[0] == '0' || stockCode[0] == '3') {
 		symbol = "sz" + stockCode
 	}
+
 	url := "https://web.ifzq.gtimg.cn/appstock/app/kline/kline?param=" + symbol + ",day,,,320"
-	client := &http.Client{}
+	client := &http.Client{Timeout: 10 * time.Second}
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
+
 	body, _ := ioutil.ReadAll(resp.Body)
 	var data struct {
 		Data map[string]struct {
@@ -151,13 +198,12 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 	}
 	err = json.Unmarshal(body, &data)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+
 	var stockData []StockData
-	var closes []float64
 	for _, v := range data.Data {
 		for _, item := range v.Day {
-			// item: [日期,开,收,高,低,成交量,...]
 			if len(item) < 6 {
 				continue
 			}
@@ -168,6 +214,7 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 			high, _ := strconv.ParseFloat(item[3].(string), 64)
 			low, _ := strconv.ParseFloat(item[4].(string), 64)
 			vol, _ := strconv.ParseFloat(item[5].(string), 64)
+
 			stockData = append(stockData, StockData{
 				Date:   dt,
 				Open:   open,
@@ -176,9 +223,181 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 				Low:    low,
 				Volume: vol,
 			})
-			closes = append(closes, close)
 		}
 	}
+	return stockData, nil
+}
+
+// 网易API数据源
+func fetchFromNetEase(stockCode string) ([]StockData, error) {
+	// 网易API格式：0.000001（深市）、1.600036（沪市）
+	symbol := stockCode
+	if len(stockCode) == 6 && stockCode[0] == '6' {
+		symbol = "1." + stockCode
+	} else if len(stockCode) == 6 && (stockCode[0] == '0' || stockCode[0] == '3') {
+		symbol = "0." + stockCode
+	}
+
+	url := fmt.Sprintf("http://api.money.126.net/data/feed/%s/history", symbol)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	var data map[string]struct {
+		Data [][]float64 `json:"data"`
+	}
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		return nil, err
+	}
+
+	var stockData []StockData
+	for _, v := range data {
+		for _, item := range v.Data {
+			if len(item) < 6 {
+				continue
+			}
+			// 网易数据格式：[时间戳, 开盘, 最高, 最低, 收盘, 成交量]
+			timestamp := int64(item[0])
+			dt := time.Unix(timestamp/1000, 0)
+
+			stockData = append(stockData, StockData{
+				Date:   dt,
+				Open:   item[1],
+				High:   item[2],
+				Low:    item[3],
+				Close:  item[4],
+				Volume: item[5],
+			})
+		}
+	}
+	return stockData, nil
+}
+
+// 雪球API数据源
+func fetchFromXueqiu(stockCode string) ([]StockData, error) {
+	// 雪球API格式：SZ000001、SH600036
+	symbol := stockCode
+	if len(stockCode) == 6 && stockCode[0] == '6' {
+		symbol = "SH" + stockCode
+	} else if len(stockCode) == 6 && (stockCode[0] == '0' || stockCode[0] == '3') {
+		symbol = "SZ" + stockCode
+	}
+
+	// 获取当前时间戳（雪球API不需要时间参数，但保留注释说明）
+	// now := time.Now()
+	// endTime := now.UnixNano() / 1e6
+	// startTime := now.AddDate(0, -1, 0).UnixNano() / 1e6 // 最近1个月
+
+	url := fmt.Sprintf("https://stock.xueqiu.com/v5/stock/chart/kline.json?symbol=%s&period=day&type=before&count=320&indicator=kline", symbol)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Referer", "https://xueqiu.com")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	var data struct {
+		Data struct {
+			Item [][]interface{} `json:"item"`
+		} `json:"data"`
+	}
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		return nil, err
+	}
+
+	var stockData []StockData
+	for _, item := range data.Data.Item {
+		if len(item) < 6 {
+			continue
+		}
+		// 雪球数据格式：[时间戳, 成交量, 开盘, 最高, 最低, 收盘, ...]
+		timestamp := int64(item[0].(float64))
+		dt := time.Unix(timestamp/1000, 0)
+		volume := item[1].(float64)
+		open := item[2].(float64)
+		high := item[3].(float64)
+		low := item[4].(float64)
+		close := item[5].(float64)
+
+		stockData = append(stockData, StockData{
+			Date:   dt,
+			Open:   open,
+			High:   high,
+			Low:    low,
+			Close:  close,
+			Volume: volume,
+		})
+	}
+	return stockData, nil
+}
+
+// 数据验证和过滤
+func validateAndFilterData(stockData []StockData, stockCode string) []StockData {
+	var validData []StockData
+
+	// 价格合理性检查
+	for _, data := range stockData {
+		// 基本价格检查
+		if data.Open <= 0 || data.Close <= 0 || data.High <= 0 || data.Low <= 0 {
+			continue
+		}
+
+		// 价格逻辑检查
+		if data.High < data.Open || data.High < data.Close || data.High < data.Low {
+			continue
+		}
+		if data.Low > data.Open || data.Low > data.Close || data.Low > data.High {
+			continue
+		}
+
+		// 价格范围检查（防止异常值）
+		if data.Close > 10000 || data.Close < 0.01 {
+			continue
+		}
+
+		// 成交量检查
+		if data.Volume < 0 {
+			continue
+		}
+
+		validData = append(validData, data)
+	}
+
+	// 如果过滤后数据太少，记录警告
+	if len(validData) < int(float64(len(stockData))*0.8) {
+		fmt.Printf("[数据验证] ⚠️  %s 数据过滤较多：原始%d条，有效%d条\n",
+			stockCode, len(stockData), len(validData))
+	}
+
+	return validData
+}
+
+// 计算技术指标
+func calculateTechnicalIndicators(stockData []StockData) []TechnicalIndicator {
+	if len(stockData) == 0 {
+		return nil
+	}
+
+	var closes []float64
+	var volumes []float64
+	for _, d := range stockData {
+		closes = append(closes, d.Close)
+		volumes = append(volumes, d.Volume)
+	}
+
 	// 本地计算技术指标
 	ma := func(arr []float64, n int, idx int) float64 {
 		if idx+1 < n {
@@ -280,11 +499,6 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 	}
 
 	var indicators []TechnicalIndicator
-	var volumes []float64
-	for _, d := range stockData {
-		volumes = append(volumes, d.Volume)
-	}
-
 	for i := range stockData {
 		// 计算MACD
 		macd, signal, histogram := calcMACD(closes, i)
@@ -327,7 +541,86 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 			VolumeMA20: volMA20,
 		})
 	}
-	return stockData, indicators, nil
+	return indicators
+}
+
+// 实时价格验证函数
+func validateLatestPrice(stockCode string, stockData []StockData, apiKey, model string) string {
+	if len(stockData) == 0 {
+		return ""
+	}
+
+	// 获取本地最新价格
+	localLatest := stockData[len(stockData)-1]
+	localPrice := localLatest.Close
+	localDate := localLatest.Date.Format("2006-01-02")
+
+	// 构造价格验证prompt
+	prompt := fmt.Sprintf(`请联网查询股票%s的最新收盘价，并严格按照以下格式输出：
+
+最新价格：XX.XX元
+查询时间：YYYY-MM-DD HH:MM
+数据来源：XX（如：东方财富、同花顺、雪球等）
+
+请确保：
+1. 查询的是最新准确的收盘价
+2. 如果价格异常（如超过1000元或低于0.01元），请重新查询
+3. 只输出价格信息，不要添加其他分析内容`, stockCode)
+
+	// 调用DeepSeek API获取最新价格
+	result, err := GenerateAIReportWithConfigAndSearch(
+		stockCode, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions",
+		model, true, true) // 启用联网搜索
+
+	if err != nil {
+		fmt.Printf("[价格验证] 查询失败: %v\n", err)
+		return ""
+	}
+
+	// 解析价格信息
+	onlinePrice := parsePriceFromResult(result)
+	if onlinePrice == 0 { // Changed from onlinePrice == "" to onlinePrice == 0
+		return ""
+	}
+
+	// 计算价格差异
+	priceDiff := ""
+	if localPrice > 0 {
+		diff := onlinePrice - localPrice
+		diffPercent := (diff / localPrice) * 100
+		priceDiff = fmt.Sprintf("（差异：%+.2f元，%+.2f%%）", diff, diffPercent)
+	}
+
+	priceInfo := fmt.Sprintf("%s元 %s",
+		strings.TrimSpace(fmt.Sprintf("%.2f", onlinePrice)), priceDiff)
+
+	fmt.Printf("[价格验证] %s 本地：%.2f元（%s） 联网：%s\n",
+		stockCode, localPrice, localDate, priceInfo)
+
+	return priceInfo
+}
+
+// 从AI结果中解析价格
+func parsePriceFromResult(result string) float64 {
+	// 查找价格模式
+	pricePatterns := []string{
+		`最新价格：(\d+\.?\d*)元`,
+		`(\d+\.?\d*)元`,
+		`价格：(\d+\.?\d*)`,
+	}
+
+	for _, pattern := range pricePatterns {
+		re := regexp.MustCompile(pattern)
+		matches := re.FindStringSubmatch(result)
+		if len(matches) >= 2 {
+			price, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil && price > 0 && price < 10000 {
+				return price
+			}
+		}
+	}
+
+	return 0
 }
 
 func BuildPrompt(params AnalysisParams) string {
@@ -335,7 +628,18 @@ func BuildPrompt(params AnalysisParams) string {
 	isOnline := params.SearchMode || params.HybridSearch
 	prompt := ""
 	if isOnline {
-		prompt += fmt.Sprintf("请联网获取股票%s的最新股价、最新公告和新闻，分析时以最新联网数据为准。如本地数据与最新行情不符，请以联网数据为主，并在报告开头注明最新股价和日期。\n", strings.Join(params.StockCodes, ","))
+		prompt += fmt.Sprintf(`请联网获取股票%s的最新股价、最新公告和新闻，分析时以最新联网数据为准。
+
+【重要】数据验证要求：
+1. 请联网查询该股票的最新收盘价，并与本地K线数据对比
+2. 如果最新联网价格与本地数据差异超过5%，请以联网数据为准
+3. 在报告开头明确标注：
+   - 最新联网价格：XX.XX元（查询时间：YYYY-MM-DD HH:MM）
+   - 本地数据最新价格：XX.XX元（日期：YYYY-MM-DD）
+   - 数据差异：+/-X.XX元（X.XX%）
+4. 如果发现价格异常（如超过1000元或低于0.01元），请重新查询并标注"数据异常，已重新验证"
+
+请确保获取的是真实准确的股价数据，不要使用过时或错误的价格信息。`, strings.Join(params.StockCodes, ","))
 	} else {
 		prompt += fmt.Sprintf("请对股票代码 %s 进行智能分析。\n", strings.Join(params.StockCodes, ","))
 	}
@@ -406,10 +710,10 @@ func BuildPrompt(params AnalysisParams) string {
 		prompt += "每个预测结论都需要提供置信度/概率区间\n"
 	}
 	prompt += "\n请提供详细的技术分析和投资建议，包含上述所有预测项目。"
-	prompt += "\n\n【格式要求】\n1. 多周期预测请用markdown表格输出，表头包含：周期、趋势判断、关键价位、置信度、主要驱动因素/理由。\n2. 综合预测结论请用markdown表格输出，表头包含：预测项目、预测值/区间、置信度、主要驱动因素/理由。\n3. 若某项预测不适用或数据不足，请在表格中注明‘数据不足’或‘-’。\n4. 结论部分请分为‘主要结论’、‘风险提示’、‘操作建议’三块，分别用表格或要点输出。"
+	prompt += "\n\n【格式要求】\n1. 多周期预测请用markdown表格输出，表头包含：周期、趋势判断、关键价位、置信度、主要驱动因素/理由。\n2. 综合预测结论请用markdown表格输出，表头包含：预测项目、预测值/区间、置信度、主要驱动因素/理由。\n3. 若某项预测不适用或数据不足，请在表格中注明'数据不足'或'-'。\n4. 结论部分请分为'主要结论'、'风险提示'、'操作建议'三块，分别用表格或要点输出。"
 	// 智能异常检测与提示
-	prompt += "\n5. 请对比最新股价与历史K线（如最近30日均价、最高价、最低价），如最新价与历史均值/区间差异超过10%，请在报告开头高亮提示‘行情异动’，并简要分析可能原因。"
-	prompt += "\n6. 如果多周期预测或综合结论中某项置信度低于60%，请在该行或结论部分自动加‘风险提示’（如‘预测不确定性较高，请谨慎参考’）。"
+	prompt += "\n5. 请对比最新股价与历史K线（如最近30日均价、最高价、最低价），如最新价与历史均值/区间差异超过10%，请在报告开头高亮提示'行情异动'，并简要分析可能原因。"
+	prompt += "\n6. 如果多周期预测或综合结论中某项置信度低于60%，请在该行或结论部分自动加'风险提示'（如'预测不确定性较高，请谨慎参考'）。"
 	return prompt
 }
 
@@ -498,6 +802,16 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
 	}
 	chartPaths, _ := GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
+
+	// 新增：实时价格验证（联网模式下）
+	if params.SearchMode || params.HybridSearch {
+		latestPrice := validateLatestPrice(params.StockCodes[0], stockData, params.APIKey, params.Model)
+		if latestPrice != "" {
+			// 在prompt中注入价格验证信息
+			priceInfo := fmt.Sprintf("\n【价格验证信息】\n最新联网验证价格：%s\n请确保分析基于此准确价格。\n", latestPrice)
+			prompt = priceInfo + prompt
+		}
+	}
 
 	// 新增：行情表格注入
 	stockTable := FormatStockDataTable(stockData, indicators)
