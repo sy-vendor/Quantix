@@ -66,6 +66,9 @@ type AnalysisParams struct {
 	SentimentScore       bool     // 是否预测情绪评分
 	MarketPosition       bool     // 是否预测市场定位
 	CompetitiveAdvantage bool     // 是否预测竞争优势
+
+	// 新增：回测参数
+	BacktestParams *BacktestParams // 回测参数，允许为nil
 }
 
 type AnalysisResult struct {
@@ -124,6 +127,28 @@ type TechnicalIndicator struct {
 	OBV       float64 // 能量潮指标
 	ATR       float64 // 真实波幅
 	WilliamsR float64 // 威廉指标
+
+	// 新增：更多高级技术指标
+	StochK       float64 // 随机指标K值
+	StochD       float64 // 随机指标D值
+	ADX          float64 // 平均趋向指数
+	ParabolicSAR float64 // 抛物线转向指标
+	Ichimoku     struct {
+		TenkanSen   float64 // 转换线
+		KijunSen    float64 // 基准线
+		SenkouSpanA float64 // 先行带A
+		SenkouSpanB float64 // 先行带B
+		ChikouSpan  float64 // 滞后线
+	}
+	PivotPoints struct {
+		PP float64 // 轴心点
+		R1 float64 // 阻力位1
+		R2 float64 // 阻力位2
+		R3 float64 // 阻力位3
+		S1 float64 // 支撑位1
+		S2 float64 // 支撑位2
+		S3 float64 // 支撑位3
+	}
 }
 
 // 函数声明补充
@@ -132,14 +157,14 @@ func FetchStockHistory(stockCode, start, end, apiKey string) ([]StockData, []Tec
 	var stockData []StockData
 	var err error
 
-	// 数据源优先级：1. 腾讯API 2. 网易API 3. 雪球API
+	// 数据源优先级：1. 雪球API 2. 网易API 3. 腾讯API
 	dataSources := []struct {
 		name string
 		fn   func(string) ([]StockData, error)
 	}{
-		{"腾讯API", fetchFromTencent},
-		{"网易API", fetchFromNetEase},
 		{"雪球API", fetchFromXueqiu},
+		{"网易API", fetchFromNetEase},
+		{"腾讯API", fetchFromTencent},
 	}
 
 	for _, source := range dataSources {
@@ -789,69 +814,192 @@ func filterRecentDataToDate(stockData []StockData, indicators []TechnicalIndicat
 	return filteredData, filteredInd
 }
 
+// 新增：回测结果 markdown 表格
+func FormatBacktestTable(btParams BacktestParams, btResult BacktestResult) string {
+	head := "\n【策略回测结果】\n| 策略类型 | 参数 | 总收益率 | 胜率 | 最大回撤 | 盈亏比 | 交易次数 |\n|---|---|---|---|---|---|---|\n"
+	paramStr := fmt.Sprintf("%+v", btParams)
+	row := fmt.Sprintf("| %s | %s | %.2f%% | %.2f%% | %.2f%% | %.2f | %d |\n",
+		btParams.StrategyType, paramStr, btResult.TotalReturn*100, btResult.WinRate*100, btResult.MaxDrawdown*100, btResult.ProfitFactor, btResult.Trades)
+	return head + row
+}
+
+// 新增：风险指标 markdown 表格
+func FormatRiskTable(risk RiskMetrics) string {
+	head := "\n【风险指标】\n| 波动率 | 最大回撤 | 夏普比率 | VaR(95%) | 风险等级 | 风险评分 |\n|---|---|---|---|---|---|\n"
+	row := fmt.Sprintf("| %.4f | %.2f%% | %.2f | %.4f | %s | %.1f |\n",
+		risk.Volatility, risk.MaxDrawdown*100, risk.SharpeRatio, risk.VaR95, risk.RiskLevel, risk.RiskScore)
+	return head + row
+}
+
+// 新增：回测结果 HTML 表格
+func FormatBacktestTableHTML(btParams BacktestParams, btResult BacktestResult) string {
+	return fmt.Sprintf(`
+<h3>【策略回测结果】</h3>
+<table>
+<tr><th>策略类型</th><th>参数</th><th>总收益率</th><th>胜率</th><th>最大回撤</th><th>盈亏比</th><th>交易次数</th></tr>
+<tr>
+<td>%s</td>
+<td>%+v</td>
+<td>%.2f%%</td>
+<td>%.2f%%</td>
+<td>%.2f%%</td>
+<td>%.2f</td>
+<td>%d</td>
+</tr>
+</table>
+`, btParams.StrategyType, btParams, btResult.TotalReturn*100, btResult.WinRate*100, btResult.MaxDrawdown*100, btResult.ProfitFactor, btResult.Trades)
+}
+
+// 新增：风险指标 HTML 表格
+func FormatRiskTableHTML(risk RiskMetrics) string {
+	return fmt.Sprintf(`
+<h3>【风险指标】</h3>
+<table>
+<tr><th>波动率</th><th>最大回撤</th><th>夏普比率</th><th>VaR(95%%)</th><th>风险等级</th><th>风险评分</th></tr>
+<tr>
+<td>%.4f</td>
+<td>%.2f%%</td>
+<td>%.2f</td>
+<td>%.4f</td>
+<td>%s</td>
+<td>%.1f</td>
+</tr>
+</table>
+`, risk.Volatility, risk.MaxDrawdown*100, risk.SharpeRatio, risk.VaR95, risk.RiskLevel, risk.RiskScore)
+}
+
 func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, string, string, bool, bool) (string, error)) AnalysisResult {
 	prompt := params.Prompt
 	if prompt == "" {
 		prompt = BuildPrompt(params)
 	}
 
-	// 生成图表
-	stockData, indicators, _ := FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
-	if len(stockData) > 0 {
-		latest := stockData[len(stockData)-1].Date
-		stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
-	}
-	chartPaths, _ := GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
+	// 自动插入当前系统日期声明，防止AI用自身认知时间
+	now := time.Now().Format("2006-01-02")
+	dateNotice := fmt.Sprintf(
+		"\n【重要提示】本系统优先使用 DeepSeek 联网模式获取最新行情和分析，只有在联网失败时才尝试本地数据源。请严格以当前分析时间 %s 为准，禁止引用AI自身认知的时间或任何与本地参数不符的时间信息。若分析区间超出数据范围，请直接说明“数据不足”，不要虚构或假设当前时间。\n",
+		now)
+	prompt = dateNotice + prompt + "\n请再次确认，所有分析均以当前分析时间为准，不要引用AI自身时间认知。\n"
 
-	// 新增：实时价格验证（联网模式下）
-	if params.SearchMode || params.HybridSearch {
-		latestPrice := validateLatestPrice(params.StockCodes[0], stockData, params.APIKey, params.Model)
-		if latestPrice != "" {
-			// 在prompt中注入价格验证信息
-			priceInfo := fmt.Sprintf("\n【价格验证信息】\n最新联网验证价格：%s\n请确保分析基于此准确价格。\n", latestPrice)
-			prompt = priceInfo + prompt
+	useHTML := false
+	for _, o := range params.Output {
+		if o == "html" || o == "pdf" {
+			useHTML = true
+			break
 		}
 	}
 
-	// 新增：行情表格注入
-	stockTable := FormatStockDataTable(stockData, indicators)
-	prompt = stockTable + "\n" + prompt
+	var report string
+	var err error
+	var savedFile string
+	var chartRefs, riskTable, backtestTable string
 
-	report, err := genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode, params.HybridSearch)
+	var stockData []StockData
+	var indicators []TechnicalIndicator
+	var chartPaths []string
+
+	if params.SearchMode || params.HybridSearch {
+		// 联网模式下不强制本地数据，但仍可生成图表、风险、回测表格（如有本地数据）
+		stockData, indicators, _ = FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
+		if len(stockData) > 0 {
+			latest := stockData[len(stockData)-1].Date
+			stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
+			chartPaths, _ = GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
+		}
+		report, err = genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode, params.HybridSearch)
+	} else {
+		stockData, indicators, fetchErr := FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
+		if len(stockData) > 0 {
+			latest := stockData[len(stockData)-1].Date
+			stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
+			chartPaths, _ = GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
+		}
+		if len(stockData) == 0 && fetchErr != nil {
+			params.SearchMode = true
+			params.HybridSearch = false
+			prompt = "[提示] DeepSeek 联网模式优先，本地数据源全部获取失败，已自动继续使用 DeepSeek 联网分析。\n" + BuildPrompt(params)
+			stockData, indicators, _ = FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
+			if len(stockData) > 0 {
+				latest := stockData[len(stockData)-1].Date
+				stockData, indicators = filterRecentDataToDate(stockData, indicators, latest, 12)
+				chartPaths, _ = GenerateCharts(params.StockCodes[0], stockData, indicators, "charts")
+			}
+			report, err = genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, true, false)
+		} else {
+			riskTable = ""
+			if len(stockData) > 0 {
+				risk := CalculateRiskMetrics(stockData)
+				if useHTML {
+					riskTable = FormatRiskTableHTML(risk)
+				} else {
+					riskTable = FormatRiskTable(risk)
+				}
+			}
+			stockTable := FormatStockDataTable(stockData, indicators)
+			prompt = stockTable + "\n" + prompt
+			report, err = genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, false, false)
+		}
+	}
 	if err != nil {
 		return AnalysisResult{StockCode: params.StockCodes[0], Err: err}
 	}
 
-	// 在报告前插入图表引用
-	var chartRefs string
-	for _, p := range chartPaths {
-		chartRefs += fmt.Sprintf("![图表](%s)\n", p)
+	// ====== 图表引用、风险、回测表格统一拼接 ======
+	if len(chartPaths) > 0 {
+		for _, p := range chartPaths {
+			chartRefs += fmt.Sprintf("![图表](%s)\n", p)
+		}
 	}
-	report = chartRefs + "\n" + report
+	if riskTable == "" && len(stockData) > 0 {
+		risk := CalculateRiskMetrics(stockData)
+		if useHTML {
+			riskTable = FormatRiskTableHTML(risk)
+		} else {
+			riskTable = FormatRiskTable(risk)
+		}
+	}
+	var btParams BacktestParams
+	if params.BacktestParams != nil {
+		btParams = *params.BacktestParams
+	} else {
+		btParams = BacktestParams{
+			StrategyType:   "ma_cross",
+			FastMAPeriod:   5,
+			SlowMAPeriod:   20,
+			BreakoutPeriod: 10,
+			RSIPeriod:      14,
+			RSIOverbought:  70,
+			RSIOversold:    30,
+			StopLoss:       0.05,
+			TakeProfit:     0.10,
+			InitialCash:    100000,
+		}
+	}
+	btResult := BacktestStrategy(stockData, btParams)
+	if useHTML {
+		backtestTable = FormatBacktestTableHTML(btParams, btResult)
+	} else {
+		backtestTable = FormatBacktestTable(btParams, btResult)
+	}
 
-	// 自动修复：确保history目录存在
+	finalReport := chartRefs + riskTable + backtestTable + report
+
+	// ====== 恢复多格式导出逻辑 ======
 	os.MkdirAll("history", 0755)
-
-	// 新增：结构化保存预测结果
-	savePredictionTablesToCSV(params.StockCodes[0], params.End, report)
-
-	// 支持多格式导出
-	exports := []string{"md"} // 默认md
+	exports := []string{"md"}
 	if len(params.Output) > 0 {
 		exports = params.Output
 	}
-	var savedFile string
 	var writeErr error
 	for _, ext := range exports {
 		var fname string
 		fbase := fmt.Sprintf("%s-%s-%s", params.StockCodes[0], params.End, time.Now().Format("150405"))
 		fpath := ""
-		// 先处理图片
-		reportHTML := replaceImagesWithAbsHTML(report)
+		reportHTML := replaceImagesWithAbsHTML(finalReport)
 		if ext == "md" {
 			fname = fbase + ".md"
 			fpath = filepath.Join("history", fname)
-			err := ioutil.WriteFile(fpath, []byte(report), 0644)
+			err := ioutil.WriteFile(fpath, []byte(finalReport), 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[错误] 写入Markdown文件失败: %s\n", err)
 				writeErr = err
@@ -887,9 +1035,9 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		}
 	}
 	if writeErr != nil {
-		return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: savedFile, Err: writeErr}
+		return AnalysisResult{StockCode: params.StockCodes[0], Report: finalReport, SavedFile: savedFile, Err: writeErr}
 	}
-	return AnalysisResult{StockCode: params.StockCodes[0], Report: report, SavedFile: savedFile}
+	return AnalysisResult{StockCode: params.StockCodes[0], Report: finalReport, SavedFile: savedFile}
 }
 
 // savePredictionTablesToCSV 解析AI报告中的表格并保存到CSV

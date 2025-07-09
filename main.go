@@ -699,6 +699,36 @@ func aiAnalysisInteractiveMenu() {
 	}
 	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
 
+	// Step 11: 回测策略类型与参数
+	printStepBox("Step 11: Backtest Strategy",
+		"选择回测策略类型及参数",
+		"支持：均线交叉、突破、RSI等",
+	)
+	strategyOptions := []string{"均线交叉(ma_cross)", "突破(breakout)", "RSI(rsi)"}
+	defaultStrategy := "均线交叉(ma_cross)"
+	strategy := interactiveSingleSelect("请选择回测策略类型：", strategyOptions, defaultStrategy)
+
+	var backtestParams analysis.BacktestParams
+	switch strategy {
+	case "均线交叉(ma_cross)":
+		backtestParams.StrategyType = "ma_cross"
+		backtestParams.FastMAPeriod = interactiveInputInt("请输入快速均线周期（如5）:", 5)
+		backtestParams.SlowMAPeriod = interactiveInputInt("请输入慢速均线周期（如20）:", 20)
+	case "突破(breakout)":
+		backtestParams.StrategyType = "breakout"
+		backtestParams.BreakoutPeriod = interactiveInputInt("请输入突破周期（如10）:", 10)
+	case "RSI(rsi)":
+		backtestParams.StrategyType = "rsi"
+		backtestParams.RSIPeriod = interactiveInputInt("请输入RSI周期（如14）:", 14)
+		backtestParams.RSIOverbought = interactiveInputFloat("请输入RSI超买阈值（如70）:", 70)
+		backtestParams.RSIOversold = interactiveInputFloat("请输入RSI超卖阈值（如30）:", 30)
+	}
+	// 通用参数
+	backtestParams.StopLoss = interactiveInputFloat("请输入止损百分比（如0.05表示5%）:", 0.05)
+	backtestParams.TakeProfit = interactiveInputFloat("请输入止盈百分比（如0.10表示10%）:", 0.10)
+	backtestParams.InitialCash = interactiveInputFloat("请输入初始资金（如100000）:", 100000)
+	printStepBox("Step 11: Backtest Strategy", fmt.Sprintf("[当前策略]: %s, 参数: %+v", backtestParams.StrategyType, backtestParams))
+
 	params := analysis.AnalysisParams{
 		APIKey:               apiKey,
 		Model:                model,
@@ -727,6 +757,7 @@ func aiAnalysisInteractiveMenu() {
 		SentimentScore:       contains(predictionItems, "情绪评分预测"),
 		MarketPosition:       contains(predictionItems, "市场定位分析"),
 		CompetitiveAdvantage: contains(predictionItems, "竞争优势分析"),
+		BacktestParams:       &backtestParams,
 	}
 
 	fmt.Println("\n=== 开始AI智能分析 ===")
@@ -1061,18 +1092,44 @@ func aiScheduleInteractiveMenu() {
 	}
 	printStepBox("Step 10: Research Depth", fmt.Sprintf("[当前选择]: %s", detailText))
 
-	// Step 12: 定时周期
-	printStepBox("Step 12: Schedule",
-		"请输入定时任务周期，如 10m、1h、daily（分钟/小时/每天）",
-		"示例：10m 表示每10分钟，1h 表示每小时，daily 表示每天0点",
+	// Step 11: 回测策略类型与参数
+	printStepBox("Step 11: Backtest Strategy",
+		"选择回测策略类型及参数",
+		"支持：均线交叉、突破、RSI等",
 	)
-	schedule := interactiveInput("请输入定时任务周期（如10m/1h/daily）:", "1h")
-	dur, err := parseSchedule(schedule)
+	strategyOptions := []string{"均线交叉(ma_cross)", "突破(breakout)", "RSI(rsi)"}
+	defaultStrategy := "均线交叉(ma_cross)"
+	strategy := interactiveSingleSelect("请选择回测策略类型：", strategyOptions, defaultStrategy)
+
+	var backtestParams analysis.BacktestParams
+	switch strategy {
+	case "均线交叉(ma_cross)":
+		backtestParams.StrategyType = "ma_cross"
+		backtestParams.FastMAPeriod = interactiveInputInt("请输入快速均线周期（如5）:", 5)
+		backtestParams.SlowMAPeriod = interactiveInputInt("请输入慢速均线周期（如20）:", 20)
+	case "突破(breakout)":
+		backtestParams.StrategyType = "breakout"
+		backtestParams.BreakoutPeriod = interactiveInputInt("请输入突破周期（如10）:", 10)
+	case "RSI(rsi)":
+		backtestParams.StrategyType = "rsi"
+		backtestParams.RSIPeriod = interactiveInputInt("请输入RSI周期（如14）:", 14)
+		backtestParams.RSIOverbought = interactiveInputFloat("请输入RSI超买阈值（如70）:", 70)
+		backtestParams.RSIOversold = interactiveInputFloat("请输入RSI超卖阈值（如30）:", 30)
+	}
+	// 通用参数
+	backtestParams.StopLoss = interactiveInputFloat("请输入止损百分比（如0.05表示5%）:", 0.05)
+	backtestParams.TakeProfit = interactiveInputFloat("请输入止盈百分比（如0.10表示10%）:", 0.10)
+	backtestParams.InitialCash = interactiveInputFloat("请输入初始资金（如100000）:", 100000)
+	printStepBox("Step 11: Backtest Strategy", fmt.Sprintf("[当前策略]: %s, 参数: %+v", backtestParams.StrategyType, backtestParams))
+
+	// ====== 修复：定时周期输入和 dur 赋值 ======
+	scheduleInput := interactiveInput("请输入定时周期（如 1h、10m、daily）:", "1h")
+	dur, err := parseSchedule(scheduleInput)
 	if err != nil {
-		fmt.Println("[定时任务] 周期格式错误：", err)
+		fmt.Println("[定时任务] 格式错误：", err)
 		return
 	}
-	printStepBox("Step 12: Schedule", fmt.Sprintf("[当前周期]: %s", schedule))
+	// =========================================
 
 	params := analysis.AnalysisParams{
 		APIKey:               apiKey,
@@ -1102,6 +1159,7 @@ func aiScheduleInteractiveMenu() {
 		SentimentScore:       contains(predictionItems, "情绪评分预测"),
 		MarketPosition:       contains(predictionItems, "市场定位分析"),
 		CompetitiveAdvantage: contains(predictionItems, "竞争优势分析"),
+		BacktestParams:       &backtestParams,
 	}
 
 	fmt.Println("\n=== 定时任务已启动，Ctrl+C 可随时终止 ===")
@@ -1655,4 +1713,24 @@ func parseActualPricesFromTable(result string) []string {
 	}
 
 	return prices
+}
+
+// survey整数输入
+func interactiveInputInt(title string, defaultValue int) int {
+	var result string
+	prompt := &survey.Input{
+		Message: title,
+		Default: fmt.Sprintf("%d", defaultValue),
+		Help:    "直接输入整数，回车确认",
+	}
+	err := survey.AskOne(prompt, &result, survey.WithHelpInput('?'))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "输入失败: %v\n", err)
+		os.Exit(1)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(result))
+	if err != nil {
+		return defaultValue
+	}
+	return n
 }
