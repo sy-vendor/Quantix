@@ -229,11 +229,8 @@ func promptForPredictionOptions() (periods, dims, searchScope []string, outputFo
 		"新闻舆情", "研报分析", "公告解读", "论坛讨论", "社交媒体",
 		"宏观经济", "政策影响", "国际环境", "产业链", "竞争格局",
 	}
-	defaultDims := []string{"技术面", "基本面", "资金面"}
-	fmt.Println("dimOptions:", dimOptions)
-	fmt.Println("defaultDims:", defaultDims)
+	defaultDims := []string{"技术面", "基本面", "资金面", "行业对比", "情绪分析"}
 	dims = interactiveSelectList("请选择分析维度（可多选）：", dimOptions, defaultDims)
-	fmt.Println("dims 结果：", dims)
 
 	// 输出格式单选
 	outputOptions := []string{"结构化表格", "要点", "详细长文", "摘要", "图表化报告", "多维度对比"}
