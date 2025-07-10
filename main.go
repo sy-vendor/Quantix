@@ -473,48 +473,71 @@ func printStepBox(title string, lines ...string) {
 func aiAnalysisInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 
+	// Step 0: 选择大模型
+	llmOptions := []string{"DeepSeek", "Gemini"}
+	llmType := interactiveSingleSelect("请选择大模型：", llmOptions, llmOptions[0])
+
 	fmt.Println("\n================= AI 智能分析配置 =================")
 	fmt.Println("单选：使用 ↑↓ 箭头键移动选择，回车键确认")
 	fmt.Println("多选：使用 ↑↓ 箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认")
 	fmt.Println("按 ? 键可查看详细操作说明")
 	fmt.Println("==================================================")
 
-	// Step 0: API Key
-	printStepBox("Step 0: API Key",
-		"请输入 DeepSeek API Key",
-		"说明：用于访问 DeepSeek LLM 服务",
-	)
-	apiKey := promptForAPIKey()
-	printStepBox("Step 0: API Key", fmt.Sprintf("[当前API Key]: %s...", func() string {
-		if len(apiKey) > 8 {
-			return apiKey[:8]
-		} else {
-			return apiKey
+	// Step 1: API Key & 模型
+	var apiKey string
+	var models []string
+	if llmType == "DeepSeek" {
+		printStepBox("Step 0: API Key",
+			"请输入 DeepSeek API Key",
+			"说明：用于访问 DeepSeek LLM 服务",
+		)
+		apiKey = promptForAPIKey()
+		printStepBox("Step 0: API Key", fmt.Sprintf("[当前API Key]: %s...", func() string {
+			if len(apiKey) > 8 {
+				return apiKey[:8]
+			} else {
+				return apiKey
+			}
+		}()))
+		printStepBox("Step 1: AI Model",
+			"选择要使用的AI模型",
+			"说明：不同模型分析能力和速度略有差异",
+			"Default: 自动推荐 DeepSeek 模型",
+			"正在获取可用 DeepSeek 模型...",
+		)
+		models, _ = fetchDeepSeekModels(apiKey, "")
+		deepseekModels := make([]string, 0)
+		for _, m := range models {
+			if strings.Contains(m, "deepseek") {
+				deepseekModels = append(deepseekModels, m)
+			}
 		}
-	}()))
-
-	// Step 1: 选择模型
-	printStepBox("Step 1: AI Model",
-		"选择要使用的AI模型",
-		"说明：不同模型分析能力和速度略有差异",
-		"Default: 自动推荐 DeepSeek 模型",
-		"正在获取可用 DeepSeek 模型...",
-	)
-	models, err := fetchDeepSeekModels(apiKey, "")
-	deepseekModels := make([]string, 0)
-	for _, m := range models {
-		if strings.Contains(m, "deepseek") {
-			deepseekModels = append(deepseekModels, m)
+		if len(deepseekModels) > 0 {
+			models = deepseekModels
 		}
-	}
-	var model string
-	if err == nil && len(deepseekModels) > 0 {
-		model = promptForModel(deepseekModels)
 	} else {
-		fmt.Println("未找到可用的 DeepSeek 模型，请手动输入模型名（如 deepseek/deepseek-r1:free）")
-		model, _ = reader.ReadString('\n')
-		model = strings.TrimSpace(model)
+		// Gemini
+		printStepBox("Step 0: API Key",
+			"请输入 Gemini API Key（可留空自动读取环境变量 GEMINI_API_KEY）",
+			"说明：用于访问 Gemini LLM 服务",
+		)
+		apiKey = os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			fmt.Print("请输入 Gemini API Key: ")
+			apiKey, _ = reader.ReadString('\n')
+			apiKey = strings.TrimSpace(apiKey)
+		}
+		if apiKey == "" {
+			fmt.Println("未检测到 Gemini API Key，无法继续。")
+			return
+		}
+		printStepBox("Step 1: AI Model",
+			"选择要使用的Gemini模型",
+			"说明：不同模型分析能力和速度略有差异",
+		)
+		models = []string{"gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"}
 	}
+	model := promptForModel(models)
 	printStepBox("Step 1: AI Model", fmt.Sprintf("[当前选择]: %s", model))
 
 	// Step 2: 股票代码
@@ -544,26 +567,37 @@ func aiAnalysisInteractiveMenu() {
 	printStepBox("Step 3: Analysis Date", fmt.Sprintf("[当前选择]: %s ~ %s", start, end))
 
 	// Step 4: 分析模式
-	printStepBox("Step 4: Analysis Mode",
-		"Select your analysis mode",
-		"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
-	)
-	modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
-	defaultMode := "深度思考（仅用模型推理）"
-	searchMode := interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, defaultMode)
-	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
-
-	// 定义 searchModes
+	var searchMode string
 	var searchModes []string
-	switch searchMode {
-	case "深度思考（仅用模型推理）":
-		searchModes = []string{"深度思考（仅用模型推理）"}
-	case "联网搜索（结合最新互联网信息）":
-		searchModes = []string{"联网搜索（结合最新互联网信息）"}
-	case "深度思考+联网搜索（自动融合）":
-		searchModes = []string{"深度思考+联网搜索（自动融合）"}
-	default:
-		searchModes = []string{"深度思考（仅用模型推理）"}
+	if llmType == "DeepSeek" {
+		printStepBox("Step 4: Analysis Mode",
+			"Select your analysis mode",
+			"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
+		)
+		modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
+		defaultMode := "深度思考（仅用模型推理）"
+		searchMode = interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, defaultMode)
+		printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
+		// 定义 searchModes
+		switch searchMode {
+		case "深度思考（仅用模型推理）":
+			searchModes = []string{"深度思考（仅用模型推理）"}
+		case "联网搜索（结合最新互联网信息）":
+			searchModes = []string{"联网搜索（结合最新互联网信息）"}
+		case "深度思考+联网搜索（自动融合）":
+			searchModes = []string{"深度思考+联网搜索（自动融合）"}
+		default:
+			searchModes = []string{"深度思考（仅用模型推理）"}
+		}
+	} else if llmType == "Gemini" && model == "gemini-2.5-pro" {
+		modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（Deep Search）"}
+		searchMode = interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, modeOptions[0])
+		printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
+		searchModes = []string{searchMode}
+	} else {
+		searchMode = "深度思考（仅用模型推理）"
+		searchModes = []string{searchMode}
+		printStepBox("Step 4: Analysis Mode", "该 Gemini 模型仅支持深度思考")
 	}
 
 	// Step 5: 预测参数
@@ -743,6 +777,7 @@ func aiAnalysisInteractiveMenu() {
 	printStepBox("Step 11: Backtest Strategy", fmt.Sprintf("[当前策略]: %s, 参数: %+v", backtestParams.StrategyType, backtestParams))
 
 	params := analysis.AnalysisParams{
+		LLMType:              llmType,
 		APIKey:               apiKey,
 		Model:                model,
 		StockCodes:           stockCodes,
@@ -771,6 +806,9 @@ func aiAnalysisInteractiveMenu() {
 		MarketPosition:       contains(predictionItems, "市场定位分析"),
 		CompetitiveAdvantage: contains(predictionItems, "竞争优势分析"),
 		BacktestParams:       &backtestParams,
+		// 新增：分析模式参数
+		SearchMode:   (searchMode == "联网搜索（结合最新互联网信息）") || (llmType == "Gemini" && model == "gemini-2.5-pro" && searchMode == "联网搜索（Deep Search）"),
+		HybridSearch: searchMode == "深度思考+联网搜索（自动融合）",
 	}
 
 	fmt.Println("\n=== 开始AI智能分析 ===")
@@ -861,13 +899,14 @@ func aiAnalysisInteractiveMenu() {
 
 	// 询问是否继续下一次预测
 	fmt.Println("\n=== 预测完成 ===")
-	continueOptions := []string{"返回主菜单", "继续下一次预测"}
-	continueChoice := interactiveSingleSelect("请选择下一步操作：", continueOptions, continueOptions[0])
-
+	continueOptions := []string{"", "返回主菜单", "继续下一次预测", ""}
+	continueChoice := interactiveSingleSelect("请选择下一步操作：", continueOptions, continueOptions[1])
 	if continueChoice == "继续下一次预测" {
-		aiAnalysisInteractiveMenu() // 递归调用，开始下一次预测
+		aiAnalysisInteractiveMenu()
+	} else if continueChoice == "返回主菜单" {
+		mainMenu()
 	} else {
-		mainMenu() // 返回主菜单
+		mainMenu()
 	}
 	return
 }
@@ -903,42 +942,68 @@ func aiScheduleInteractiveMenu() {
 	fmt.Println("本功能支持自动定时分析、推送，无需人工值守。Ctrl+C 可随时终止。")
 
 	// 复用 aiAnalysisInteractiveMenu 的参数交互
-	// Step 0: API Key
-	printStepBox("Step 0: API Key",
-		"请输入 DeepSeek API Key",
-		"说明：用于访问 DeepSeek LLM 服务",
-	)
-	apiKey := promptForAPIKey()
-	printStepBox("Step 0: API Key", fmt.Sprintf("[当前API Key]: %s...", func() string {
-		if len(apiKey) > 8 {
-			return apiKey[:8]
-		} else {
-			return apiKey
-		}
-	}()))
+	// Step 0: 选择大模型
+	llmOptions := []string{"DeepSeek", "Gemini"}
+	llmType := interactiveSingleSelect("请选择大模型：", llmOptions, llmOptions[0])
 
-	// Step 1: 选择模型
-	printStepBox("Step 1: AI Model",
-		"选择要使用的AI模型",
-		"说明：不同模型分析能力和速度略有差异",
-		"Default: 自动推荐 DeepSeek 模型",
-		"正在获取可用 DeepSeek 模型...",
-	)
-	models, err := fetchDeepSeekModels(apiKey, "")
-	deepseekModels := make([]string, 0)
-	for _, m := range models {
-		if strings.Contains(m, "deepseek") {
-			deepseekModels = append(deepseekModels, m)
+	fmt.Println("\n================= 定时任务配置 =================")
+	fmt.Println("本功能支持自动定时分析、推送，无需人工值守。Ctrl+C 可随时终止。")
+
+	// Step 1: API Key & 模型
+	var apiKey string
+	var models []string
+	if llmType == "DeepSeek" {
+		printStepBox("Step 0: API Key",
+			"请输入 DeepSeek API Key",
+			"说明：用于访问 DeepSeek LLM 服务",
+		)
+		apiKey = promptForAPIKey()
+		printStepBox("Step 0: API Key", fmt.Sprintf("[当前API Key]: %s...", func() string {
+			if len(apiKey) > 8 {
+				return apiKey[:8]
+			} else {
+				return apiKey
+			}
+		}()))
+		printStepBox("Step 1: AI Model",
+			"选择要使用的AI模型",
+			"说明：不同模型分析能力和速度略有差异",
+			"Default: 自动推荐 DeepSeek 模型",
+			"正在获取可用 DeepSeek 模型...",
+		)
+		models, _ = fetchDeepSeekModels(apiKey, "")
+		deepseekModels := make([]string, 0)
+		for _, m := range models {
+			if strings.Contains(m, "deepseek") {
+				deepseekModels = append(deepseekModels, m)
+			}
 		}
-	}
-	var model string
-	if err == nil && len(deepseekModels) > 0 {
-		model = promptForModel(deepseekModels)
+		if len(deepseekModels) > 0 {
+			models = deepseekModels
+		}
 	} else {
-		fmt.Println("未找到可用的 DeepSeek 模型，请手动输入模型名（如 deepseek/deepseek-r1:free）")
-		model, _ = reader.ReadString('\n')
-		model = strings.TrimSpace(model)
+		// Gemini
+		printStepBox("Step 0: API Key",
+			"请输入 Gemini API Key（可留空自动读取环境变量 GEMINI_API_KEY）",
+			"说明：用于访问 Gemini LLM 服务",
+		)
+		apiKey = os.Getenv("GEMINI_API_KEY")
+		if apiKey == "" {
+			fmt.Print("请输入 Gemini API Key: ")
+			apiKey, _ = reader.ReadString('\n')
+			apiKey = strings.TrimSpace(apiKey)
+		}
+		if apiKey == "" {
+			fmt.Println("未检测到 Gemini API Key，无法继续。")
+			return
+		}
+		printStepBox("Step 1: AI Model",
+			"选择要使用的Gemini模型",
+			"说明：不同模型分析能力和速度略有差异",
+		)
+		models = []string{"gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"}
 	}
+	model := promptForModel(models)
 	printStepBox("Step 1: AI Model", fmt.Sprintf("[当前选择]: %s", model))
 
 	// Step 2: 股票代码
@@ -968,26 +1033,37 @@ func aiScheduleInteractiveMenu() {
 	printStepBox("Step 3: Analysis Date", fmt.Sprintf("[当前选择]: %s ~ %s", start, end))
 
 	// Step 4: 分析模式
-	printStepBox("Step 4: Analysis Mode",
-		"Select your analysis mode",
-		"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
-	)
-	modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
-	defaultMode := "深度思考（仅用模型推理）"
-	searchMode := interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, defaultMode)
-	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
-
-	// 定义 searchModes
+	var searchMode string
 	var searchModes []string
-	switch searchMode {
-	case "深度思考（仅用模型推理）":
-		searchModes = []string{"深度思考（仅用模型推理）"}
-	case "联网搜索（结合最新互联网信息）":
-		searchModes = []string{"联网搜索（结合最新互联网信息）"}
-	case "深度思考+联网搜索（自动融合）":
-		searchModes = []string{"深度思考+联网搜索（自动融合）"}
-	default:
-		searchModes = []string{"深度思考（仅用模型推理）"}
+	if llmType == "DeepSeek" {
+		printStepBox("Step 4: Analysis Mode",
+			"Select your analysis mode",
+			"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
+		)
+		modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
+		defaultMode := "深度思考（仅用模型推理）"
+		searchMode = interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, defaultMode)
+		printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
+		// 定义 searchModes
+		switch searchMode {
+		case "深度思考（仅用模型推理）":
+			searchModes = []string{"深度思考（仅用模型推理）"}
+		case "联网搜索（结合最新互联网信息）":
+			searchModes = []string{"联网搜索（结合最新互联网信息）"}
+		case "深度思考+联网搜索（自动融合）":
+			searchModes = []string{"深度思考+联网搜索（自动融合）"}
+		default:
+			searchModes = []string{"深度思考（仅用模型推理）"}
+		}
+	} else if llmType == "Gemini" && model == "gemini-2.5-pro" {
+		modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（Deep Search）"}
+		searchMode = interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, modeOptions[0])
+		printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
+		searchModes = []string{searchMode}
+	} else {
+		searchMode = "深度思考（仅用模型推理）"
+		searchModes = []string{searchMode}
+		printStepBox("Step 4: Analysis Mode", "该 Gemini 模型仅支持深度思考")
 	}
 
 	// Step 5: 预测参数
@@ -1176,6 +1252,7 @@ func aiScheduleInteractiveMenu() {
 	// =========================================
 
 	params := analysis.AnalysisParams{
+		LLMType:              llmType,
 		APIKey:               apiKey,
 		Model:                model,
 		StockCodes:           stockCodes,
@@ -1204,6 +1281,9 @@ func aiScheduleInteractiveMenu() {
 		MarketPosition:       contains(predictionItems, "市场定位分析"),
 		CompetitiveAdvantage: contains(predictionItems, "竞争优势分析"),
 		BacktestParams:       &backtestParams,
+		// 新增：分析模式参数
+		SearchMode:   (searchMode == "联网搜索（结合最新互联网信息）") || (llmType == "Gemini" && model == "gemini-2.5-pro" && searchMode == "联网搜索（Deep Search）"),
+		HybridSearch: searchMode == "深度思考+联网搜索（自动融合）",
 	}
 
 	fmt.Println("\n=== 定时任务已启动，Ctrl+C 可随时终止 ===")

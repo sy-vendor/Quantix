@@ -1,12 +1,7 @@
 package analysis
 
-import (
-	"os"
-)
-
 // DeepSeekConfig 用于存储API Key和API地址
 var (
-	DeepSeekAPIKey = os.Getenv("DEEPSEEK_API_KEY")
 	DeepSeekAPIURL = "https://openrouter.ai/api/v1/chat/completions" // 可配置
 	DeepSeekModel  = "deepseek/deepseek-r1:free"                     // 可配置
 )

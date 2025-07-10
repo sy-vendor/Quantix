@@ -16,6 +16,8 @@ import (
 
 	"context"
 
+	"google.golang.org/genai"
+
 	"regexp"
 
 	"github.com/chromedp/cdproto/page"
@@ -30,6 +32,7 @@ import (
 // StockData、TechnicalIndicator用于chart.go
 
 type AnalysisParams struct {
+	LLMType      string // 新增：大模型类型 deepseek/gmini
 	APIKey       string
 	Model        string
 	StockCodes   []string
@@ -815,8 +818,13 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 	var indicators []TechnicalIndicator
 	var chartPaths []string
 
-	if params.SearchMode || params.HybridSearch {
-		// 联网模式下不强制本地数据，但仍可生成图表、风险、回测表格（如有本地数据）
+	if params.LLMType == "Gemini" {
+		report, err = GenerateGeminiReportWithConfigAndSearch(params.Model, params.APIKey, prompt, params.SearchMode)
+	} else if params.LLMType == "gmini" {
+		// 伪实现：调用 gmini API
+		report, err = GenerateGminiReportWithConfigAndSearch(params)
+	} else if params.SearchMode || params.HybridSearch {
+		// DeepSeek 联网/混合模式
 		stockData, indicators, _ = FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
 		if len(stockData) > 0 {
 			latest := stockData[len(stockData)-1].Date
@@ -825,6 +833,7 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		}
 		report, err = genFunc(params.StockCodes[0], prompt, params.APIKey, "https://api.deepseek.com/v1/chat/completions", params.Model, params.SearchMode, params.HybridSearch)
 	} else {
+		// DeepSeek 本地数据模式
 		stockData, indicators, fetchErr := FetchStockHistory(params.StockCodes[0], params.Start, params.End, params.APIKey)
 		if len(stockData) > 0 {
 			latest := stockData[len(stockData)-1].Date
@@ -1075,4 +1084,48 @@ func GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, apiURL, model st
 		return "", fmt.Errorf("DeepSeek API 无返回内容")
 	}
 	return result.Choices[0].Message.Content, nil
+}
+
+// 伪实现：gmini大模型API调用
+func GenerateGminiReportWithConfigAndSearch(params AnalysisParams) (string, error) {
+	// 这里写gmini的API调用逻辑，暂时返回伪内容
+	return "[gmini大模型分析报告]（此处为gmini模型返回的内容）", nil
+}
+
+// Gemini大模型API调用，支持 deepSearch
+func GenerateGeminiReportWithConfigAndSearch(model, apiKey, prompt string, deepSearch bool) (string, error) {
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
+	if err != nil {
+		return "", err
+	}
+	contents := []*genai.Content{
+		{Parts: []*genai.Part{
+			{Text: prompt},
+		}},
+	}
+	var config *genai.GenerateContentConfig
+	if deepSearch {
+		config = &genai.GenerateContentConfig{
+			Tools: []*genai.Tool{
+				{Retrieval: &genai.Retrieval{}},
+			},
+		}
+	}
+	resp, err := client.Models.GenerateContent(ctx, model, contents, config)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", nil
+	}
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part.Text != "" {
+			return part.Text, nil
+		}
+	}
+	return "", nil
 }
