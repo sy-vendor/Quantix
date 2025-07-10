@@ -477,7 +477,7 @@ func aiAnalysisInteractiveMenu() {
 	fmt.Println("单选：使用 ↑↓ 箭头键移动选择，回车键确认")
 	fmt.Println("多选：使用 ↑↓ 箭头键移动，空格键选择/取消，右箭头键全选，左箭头键全不选，回车键确认")
 	fmt.Println("按 ? 键可查看详细操作说明")
-	fmt.Println("==================================================\n")
+	fmt.Println("==================================================")
 
 	// Step 0: API Key
 	printStepBox("Step 0: API Key",
@@ -549,9 +549,22 @@ func aiAnalysisInteractiveMenu() {
 		"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
 	)
 	modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
-	defaultMode := []string{"深度思考（仅用模型推理）"}
-	searchModes := interactiveSelectList("请选择分析模式（可多选）：", modeOptions, defaultMode)
-	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", strings.Join(searchModes, ", ")))
+	defaultMode := "深度思考（仅用模型推理）"
+	searchMode := interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, defaultMode)
+	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
+
+	// 定义 searchModes
+	var searchModes []string
+	switch searchMode {
+	case "深度思考（仅用模型推理）":
+		searchModes = []string{"深度思考（仅用模型推理）"}
+	case "联网搜索（结合最新互联网信息）":
+		searchModes = []string{"联网搜索（结合最新互联网信息）"}
+	case "深度思考+联网搜索（自动融合）":
+		searchModes = []string{"深度思考+联网搜索（自动融合）"}
+	default:
+		searchModes = []string{"深度思考（仅用模型推理）"}
+	}
 
 	// Step 5: 预测参数
 	printStepBox("Step 5: Prediction Options",
@@ -764,10 +777,16 @@ func aiAnalysisInteractiveMenu() {
 	fmt.Printf("分析股票：%s\n", strings.Join(stockCodes, ", "))
 	fmt.Printf("分析期间：%s 至 %s\n", start, end)
 	fmt.Printf("分析模式：%s\n", func() string {
-		if searchModes[0] == "深度思考（仅用模型推理）" {
+		if searchMode == "深度思考（仅用模型推理）" {
 			return "深度思考模式"
 		}
-		return "深度思考+联网搜索模式"
+		if searchMode == "联网搜索（结合最新互联网信息）" {
+			return "联网搜索模式"
+		}
+		if searchMode == "深度思考+联网搜索（自动融合）" {
+			return "混合模式"
+		}
+		return searchMode
 	}())
 	fmt.Println("正在生成分析报告，请稍候...")
 
@@ -839,6 +858,18 @@ func aiAnalysisInteractiveMenu() {
 		}
 	}
 	close(done)
+
+	// 询问是否继续下一次预测
+	fmt.Println("\n=== 预测完成 ===")
+	continueOptions := []string{"返回主菜单", "继续下一次预测"}
+	continueChoice := interactiveSingleSelect("请选择下一步操作：", continueOptions, continueOptions[0])
+
+	if continueChoice == "继续下一次预测" {
+		aiAnalysisInteractiveMenu() // 递归调用，开始下一次预测
+	} else {
+		mainMenu() // 返回主菜单
+	}
+	return
 }
 
 func parseSchedule(s string) (time.Duration, error) {
@@ -869,7 +900,7 @@ func parseSchedule(s string) (time.Duration, error) {
 func aiScheduleInteractiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("\n================= 定时任务配置 =================")
-	fmt.Println("本功能支持自动定时分析、推送，无需人工值守。Ctrl+C 可随时终止。\n")
+	fmt.Println("本功能支持自动定时分析、推送，无需人工值守。Ctrl+C 可随时终止。")
 
 	// 复用 aiAnalysisInteractiveMenu 的参数交互
 	// Step 0: API Key
@@ -942,9 +973,22 @@ func aiScheduleInteractiveMenu() {
 		"说明：深度思考仅用模型推理，联网搜索结合互联网信息，混合模式自动融合",
 	)
 	modeOptions := []string{"深度思考（仅用模型推理）", "联网搜索（结合最新互联网信息）", "深度思考+联网搜索（自动融合）"}
-	defaultMode := []string{"深度思考（仅用模型推理）"}
-	searchModes := interactiveSelectList("请选择分析模式（可多选）：", modeOptions, defaultMode)
-	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", strings.Join(searchModes, ", ")))
+	defaultMode := "深度思考（仅用模型推理）"
+	searchMode := interactiveSingleSelect("请选择分析模式（单选）：", modeOptions, defaultMode)
+	printStepBox("Step 4: Analysis Mode", fmt.Sprintf("[当前选择]: %s", searchMode))
+
+	// 定义 searchModes
+	var searchModes []string
+	switch searchMode {
+	case "深度思考（仅用模型推理）":
+		searchModes = []string{"深度思考（仅用模型推理）"}
+	case "联网搜索（结合最新互联网信息）":
+		searchModes = []string{"联网搜索（结合最新互联网信息）"}
+	case "深度思考+联网搜索（自动融合）":
+		searchModes = []string{"深度思考+联网搜索（自动融合）"}
+	default:
+		searchModes = []string{"深度思考（仅用模型推理）"}
+	}
 
 	// Step 5: 预测参数
 	printStepBox("Step 5: Prediction Options",
@@ -1406,7 +1450,7 @@ func main() {
 				}
 				close(done)
 			}
-			return
+			mainMenu() // 分析完进入主菜单
 		}
 		done := make(chan struct{})
 		go showAnalyzingAnimation(done)
@@ -1470,7 +1514,7 @@ func main() {
 			}
 		}
 		close(done)
-		return
+		mainMenu()
 	}
 	// 否则进入主菜单循环
 	mainMenu()
@@ -1628,19 +1672,16 @@ func updateActualPricesWithDeepSeek() {
 			model, true, true) // 启用联网搜索
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[预测追踪] 查询失败 %s %s: %v\n", stock, predDate, err)
+			fmt.Fprintf(os.Stderr, "[预测追踪] 查询失败: %v\n", err)
 			continue
 		}
 
 		// 解析表格结果
 		prices := parseActualPricesFromTable(result)
 		if len(prices) == 3 {
-			// 确保行有足够的列
 			for len(row) <= t20Idx {
 				row = append(row, "")
 			}
-
-			// 更新实际价格
 			if t1Idx >= 0 && t1Idx < len(row) {
 				row[t1Idx] = prices[0]
 			}
@@ -1650,7 +1691,6 @@ func updateActualPricesWithDeepSeek() {
 			if t20Idx >= 0 && t20Idx < len(row) {
 				row[t20Idx] = prices[2]
 			}
-
 			records[i] = row
 			updated = true
 			fmt.Printf("[预测追踪] ✓ %s %s: T+1=%s, T+5=%s, T+20=%s\n",
@@ -1659,17 +1699,15 @@ func updateActualPricesWithDeepSeek() {
 			fmt.Fprintf(os.Stderr, "[预测追踪] 解析失败 %s %s: 期望3个价格，实际%d个\n",
 				stock, predDate, len(prices))
 		}
-
 		// 避免 API 调用过于频繁
 		time.Sleep(1 * time.Second)
 	}
 
-	// 写回 CSV
 	if updated {
-		f.Close()
-		f, err = os.Create(csvPath)
+		// 保存更新后的预测记录
+		f, err := os.Create("history/predictions.csv")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[预测追踪] 无法创建CSV: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[预测追踪] 无法保存CSV: %v\n", err)
 			return
 		}
 		defer f.Close()
@@ -1677,31 +1715,26 @@ func updateActualPricesWithDeepSeek() {
 		writer := csv.NewWriter(f)
 		defer writer.Flush()
 
-		for _, record := range records {
-			writer.Write(record)
+		for _, row := range records {
+			err := writer.Write(row)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[预测追踪] 写入CSV失败: %v\n", err)
+				return
+			}
 		}
-
-		fmt.Printf("[预测追踪] ✓ 已更新 %d 条预测记录的实际价格\n", len(records)-1)
-	} else {
-		fmt.Println("[预测追踪] 所有记录都已包含实际价格，无需更新")
 	}
 }
 
 // parseActualPricesFromTable 从 AI 返回的 markdown 表格中解析实际价格
 func parseActualPricesFromTable(result string) []string {
 	prices := make([]string, 0)
-
-	// 查找表格行
 	lines := strings.Split(result, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "|") && strings.Contains(line, "|") {
-			// 跳过表头和分隔线
 			if strings.Contains(line, "日期") || strings.Contains(line, "---") {
 				continue
 			}
-
-			// 解析表格行
 			parts := strings.Split(line, "|")
 			if len(parts) >= 3 {
 				price := strings.TrimSpace(parts[2])
@@ -1711,7 +1744,6 @@ func parseActualPricesFromTable(result string) []string {
 			}
 		}
 	}
-
 	return prices
 }
 

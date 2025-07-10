@@ -18,13 +18,9 @@ import (
 
 	"regexp"
 
-	"encoding/csv"
-
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
-	"github.com/mattn/go-runewidth"
 	"github.com/russross/blackfriday/v2"
-	"golang.org/x/term"
 )
 
 // 类型定义补充
@@ -569,85 +565,6 @@ func calculateTechnicalIndicators(stockData []StockData) []TechnicalIndicator {
 	return indicators
 }
 
-// 实时价格验证函数
-func validateLatestPrice(stockCode string, stockData []StockData, apiKey, model string) string {
-	if len(stockData) == 0 {
-		return ""
-	}
-
-	// 获取本地最新价格
-	localLatest := stockData[len(stockData)-1]
-	localPrice := localLatest.Close
-	localDate := localLatest.Date.Format("2006-01-02")
-
-	// 构造价格验证prompt
-	prompt := fmt.Sprintf(`请联网查询股票%s的最新收盘价，并严格按照以下格式输出：
-
-最新价格：XX.XX元
-查询时间：YYYY-MM-DD HH:MM
-数据来源：XX（如：东方财富、同花顺、雪球等）
-
-请确保：
-1. 查询的是最新准确的收盘价
-2. 如果价格异常（如超过1000元或低于0.01元），请重新查询
-3. 只输出价格信息，不要添加其他分析内容`, stockCode)
-
-	// 调用DeepSeek API获取最新价格
-	result, err := GenerateAIReportWithConfigAndSearch(
-		stockCode, prompt, apiKey, "https://api.deepseek.com/v1/chat/completions",
-		model, true, true) // 启用联网搜索
-
-	if err != nil {
-		fmt.Printf("[价格验证] 查询失败: %v\n", err)
-		return ""
-	}
-
-	// 解析价格信息
-	onlinePrice := parsePriceFromResult(result)
-	if onlinePrice == 0 { // Changed from onlinePrice == "" to onlinePrice == 0
-		return ""
-	}
-
-	// 计算价格差异
-	priceDiff := ""
-	if localPrice > 0 {
-		diff := onlinePrice - localPrice
-		diffPercent := (diff / localPrice) * 100
-		priceDiff = fmt.Sprintf("（差异：%+.2f元，%+.2f%%）", diff, diffPercent)
-	}
-
-	priceInfo := fmt.Sprintf("%s元 %s",
-		strings.TrimSpace(fmt.Sprintf("%.2f", onlinePrice)), priceDiff)
-
-	fmt.Printf("[价格验证] %s 本地：%.2f元（%s） 联网：%s\n",
-		stockCode, localPrice, localDate, priceInfo)
-
-	return priceInfo
-}
-
-// 从AI结果中解析价格
-func parsePriceFromResult(result string) float64 {
-	// 查找价格模式
-	pricePatterns := []string{
-		`最新价格：(\d+\.?\d*)元`,
-		`(\d+\.?\d*)元`,
-		`价格：(\d+\.?\d*)`,
-	}
-
-	for _, pattern := range pricePatterns {
-		re := regexp.MustCompile(pattern)
-		matches := re.FindStringSubmatch(result)
-		if len(matches) >= 2 {
-			price, err := strconv.ParseFloat(matches[1], 64)
-			if err == nil && price > 0 && price < 10000 {
-				return price
-			}
-		}
-	}
-
-	return 0
-}
-
 func BuildPrompt(params AnalysisParams) string {
 	// 判断是否联网/混合模式
 	isOnline := params.SearchMode || params.HybridSearch
@@ -670,7 +587,7 @@ func BuildPrompt(params AnalysisParams) string {
 	}
 	prompt += fmt.Sprintf("分析时间范围：%s 至 %s\n", params.Start, params.End)
 	if len(params.Periods) > 0 {
-		prompt += fmt.Sprintf("预测周期：%s\n", strings.Join(params.Periods, "、"))
+		prompt += fmt.Sprintf("预测周期：%s\n", strings.Join(params.Periods, ","))
 	}
 	if len(params.Dims) > 0 {
 		prompt += fmt.Sprintf("分析维度：%s\n", strings.Join(params.Dims, "、"))
@@ -1009,7 +926,7 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		} else if ext == "html" {
 			fname = fbase + ".html"
 			fpath = filepath.Join("history", fname)
-			html := "<meta charset=\"utf-8\">\n" + exportCSS + markdownToHTML(reportHTML)
+			html := "<meta charset=\"utf-8\">\n" + exportCSS + markdownToHTML(convertMarkdownTablesToHTML(reportHTML))
 			err := ioutil.WriteFile(fpath, []byte(html), 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[错误] 写入HTML文件失败: %s\n", err)
@@ -1021,7 +938,7 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 			fname = fbase + ".pdf"
 			fpath = filepath.Join("history", fname)
 			htmlPath := fpath + ".tmp.html"
-			htmlContent := "<meta charset=\"utf-8\">\n" + exportCSS + markdownToHTML(reportHTML)
+			htmlContent := "<meta charset=\"utf-8\">\n" + exportCSS + markdownToHTML(convertMarkdownTablesToHTML(reportHTML))
 			ioutil.WriteFile(htmlPath, []byte(htmlContent), 0644)
 			err := htmlToPDF(htmlPath, fpath)
 			os.Remove(htmlPath)
@@ -1038,76 +955,6 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 		return AnalysisResult{StockCode: params.StockCodes[0], Report: finalReport, SavedFile: savedFile, Err: writeErr}
 	}
 	return AnalysisResult{StockCode: params.StockCodes[0], Report: finalReport, SavedFile: savedFile}
-}
-
-// savePredictionTablesToCSV 解析AI报告中的表格并保存到CSV
-func savePredictionTablesToCSV(stockCode, endDate, report string) {
-	csvPath := "history/predictions.csv"
-	f, err := os.OpenFile(csvPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[预测追踪] 无法打开CSV: %v\n", err)
-		return
-	}
-	defer f.Close()
-	w := csv.NewWriter(f)
-	defer w.Flush()
-
-	// 简单正则提取markdown表格
-	tableRe := regexp.MustCompile(`(?ms)\|[ \t]*周期[ \t]*\|[\s\S]+?\|[ \t]*\|[ \t]*$`)
-	tables := tableRe.FindAllString(report, -1)
-	for _, table := range tables {
-		lines := strings.Split(table, "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "|") && !strings.Contains(line, "周期") && !strings.Contains(line, "---") {
-				fields := strings.Split(line, "|")
-				for i := range fields {
-					fields[i] = strings.TrimSpace(fields[i])
-				}
-				// 追加股票代码、预测日期
-				row := append([]string{stockCode, endDate}, fields[1:len(fields)-1]...)
-				w.Write(row)
-			}
-		}
-	}
-}
-
-// printStepBoxStr 返回美观的框包裹字符串（不直接输出）
-func getBoxWidth() int {
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || w <= 0 {
-		return 120 // fallback
-	}
-	bw := int(float64(w) * 0.8)
-	if bw < 60 {
-		bw = 60
-	}
-	if bw > 200 {
-		bw = 200
-	}
-	return bw
-}
-
-func printStepBoxStr(title string, lines ...string) string {
-	width := getBoxWidth()
-	titleWidth := len([]rune(title))
-	sideLen := (width - 2 - titleWidth) / 2
-	top := "┌" + strings.Repeat("─", sideLen) + title + strings.Repeat("─", width-2-titleWidth-sideLen) + "┐\n"
-	body := ""
-	for _, l := range lines {
-		maxContent := width - 2
-		lWidth := len([]rune(l))
-		if lWidth > maxContent {
-			l = l[:maxContent-1] + "…"
-			lWidth = len([]rune(l))
-		}
-		pad := maxContent - lWidth
-		if pad < 0 {
-			pad = 0
-		}
-		body += fmt.Sprintf("│%s%s│\n", l, strings.Repeat(" ", pad))
-	}
-	bottom := "└" + strings.Repeat("─", width-2) + "┘\n"
-	return top + body + bottom
 }
 
 func htmlToPDF(htmlPath, pdfPath string) error {
@@ -1144,6 +991,43 @@ ul,ol { margin: 1em 0 1em 2em; }
 code { background: #f5f5f5; color: #c7254e; padding: 2px 4px; border-radius: 4px; }
 </style>
 `
+
+// 新增：将 markdown 表格转换为 HTML 表格
+func convertMarkdownTablesToHTML(md string) string {
+	re := regexp.MustCompile(`(?ms)(\|.+\|\n\|[-| ]+\|\n(?:\|.*\|\n?)+)`)
+	return re.ReplaceAllStringFunc(md, func(table string) string {
+		lines := strings.Split(strings.TrimSpace(table), "\n")
+		if len(lines) < 2 {
+			return table
+		}
+		var html strings.Builder
+		html.WriteString("<table>\n")
+		// 表头
+		cols := strings.Split(lines[0], "|")
+		if len(cols) < 3 {
+			return table // 防止越界
+		}
+		html.WriteString("<tr>")
+		for _, c := range cols[1 : len(cols)-1] {
+			html.WriteString("<th>" + strings.TrimSpace(c) + "</th>")
+		}
+		html.WriteString("</tr>\n")
+		// 表体
+		for _, l := range lines[2:] {
+			cells := strings.Split(l, "|")
+			if len(cells) < 3 {
+				continue // 跳过异常行
+			}
+			html.WriteString("<tr>")
+			for _, c := range cells[1 : len(cells)-1] {
+				html.WriteString("<td>" + strings.TrimSpace(c) + "</td>")
+			}
+			html.WriteString("</tr>\n")
+		}
+		html.WriteString("</table>\n")
+		return html.String()
+	})
+}
 
 // 修改 GenerateAIReportWithConfigAndSearch 实现，支持 hybridSearch
 func GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, apiURL, model string, searchMode bool, hybridSearch bool) (string, error) {
@@ -1191,24 +1075,4 @@ func GenerateAIReportWithConfigAndSearch(stock, prompt, apiKey, apiURL, model st
 		return "", fmt.Errorf("DeepSeek API 无返回内容")
 	}
 	return result.Choices[0].Message.Content, nil
-}
-
-// 字符串宽度填充，兼容中英文
-func pad(s string, width int) string {
-	w := runewidth.StringWidth(s)
-	if w < width {
-		return s + strings.Repeat(" ", width-w)
-	}
-	if w > width {
-		rs := []rune(s)
-		cut := 0
-		for i := range rs {
-			if runewidth.StringWidth(string(rs[:i+1])) > width {
-				break
-			}
-			cut = i + 1
-		}
-		return string(rs[:cut])
-	}
-	return s
 }
