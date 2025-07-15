@@ -899,14 +899,15 @@ func aiAnalysisInteractiveMenu() {
 
 	// 询问是否继续下一次预测
 	fmt.Println("\n=== 预测完成 ===")
-	continueOptions := []string{"", "返回主菜单", "继续下一次预测", ""}
-	continueChoice := interactiveSingleSelect("请选择下一步操作：", continueOptions, continueOptions[1])
+	continueOptions := []string{"返回主菜单", "继续下一次预测", "退出程序"}
+	continueChoice := interactiveSingleSelect("请选择下一步操作：", continueOptions, continueOptions[0])
 	if continueChoice == "继续下一次预测" {
 		aiAnalysisInteractiveMenu()
 	} else if continueChoice == "返回主菜单" {
 		mainMenu()
-	} else {
-		mainMenu()
+	} else if continueChoice == "退出程序" {
+		fmt.Println("再见！")
+		os.Exit(0)
 	}
 	return
 }
