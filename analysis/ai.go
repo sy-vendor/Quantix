@@ -910,6 +910,33 @@ func AnalyzeOne(params AnalysisParams, genFunc func(string, string, string, stri
 
 	finalReport := chartRefs + riskTable + backtestTable + report
 
+	// ====== 预测异常检测与高亮提示 ======
+	anomalyMsg := ""
+	if params.TargetPrice && len(stockData) >= 10 {
+		// 尝试从report中提取目标价预测（假设有“目标价位预测”字段，且为数字）
+		lines := strings.Split(report, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "目标价位预测") {
+				// 尝试提取数字
+				re := regexp.MustCompile(`([0-9]+\.[0-9]+|[0-9]+)`)
+				matches := re.FindAllString(line, -1)
+				if len(matches) > 0 {
+					pred, err := strconv.ParseFloat(matches[0], 64)
+					if err == nil {
+						anomaly, msg := DetectPredictionAnomaly(pred, stockData)
+						if anomaly {
+							anomalyMsg = msg
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	if anomalyMsg != "" {
+		finalReport = "\n> [!WARNING] " + anomalyMsg + "\n" + finalReport
+	}
+
 	// ====== 恢复多格式导出逻辑 ======
 	os.MkdirAll("history", 0755)
 	exports := []string{"md"}
@@ -1036,6 +1063,29 @@ func convertMarkdownTablesToHTML(md string) string {
 		html.WriteString("</table>\n")
 		return html.String()
 	})
+}
+
+// 检查预测值是否异常
+func DetectPredictionAnomaly(predValue float64, history []StockData) (bool, string) {
+	if len(history) < 10 {
+		return false, ""
+	}
+	// 计算历史均值和标准差
+	sum, sumsq := 0.0, 0.0
+	for _, d := range history {
+		sum += d.Close
+		sumsq += d.Close * d.Close
+	}
+	mean := sum / float64(len(history))
+	std := math.Sqrt(sumsq/float64(len(history)) - mean*mean)
+	if std == 0 {
+		return false, ""
+	}
+	// 判断是否偏离均值2倍标准差
+	if predValue > mean+2*std || predValue < mean-2*std {
+		return true, fmt.Sprintf("⚠️ 预测值 %.2f 明显偏离历史均值区间 [%.2f, %.2f]，请谨慎参考。", predValue, mean-2*std, mean+2*std)
+	}
+	return false, ""
 }
 
 // 修改 GenerateAIReportWithConfigAndSearch 实现，支持 hybridSearch
